@@ -281,27 +281,25 @@ export default function ConfiguracionUnificada() {
         banco: 'BancoSistema'
       };
       
-      // Validar antes de eliminar Clientes o Proveedores
+      // Validar antes de eliminar Clientes o Proveedores (consultas con limit 1, sin descargar todo)
       if (type === 'cliente' || type === 'proveedor') {
-        const [movimientos, cuentaCorriente] = await Promise.all([
-          base44.entities.Movimiento.list(),
-          base44.entities.CuentaCorriente.list()
-        ]);
-        
-        const tieneMovimientos = movimientos.some(m => {
-          if (type === 'cliente') {
-            return m.cliente_id === id || (m.tipo_movimiento === 'Salida de Fruta' && m.cliente_id === id);
-          } else {
-            return m.proveedor_id === id || (m.tipo_movimiento === 'Ingreso de Fruta' && m.proveedor_id === id);
-          }
-        });
-        
-        const tieneCuentaCorriente = cuentaCorriente.some(cc => {
-          const entidadTipo = type === 'cliente' ? 'Cliente' : 'Proveedor';
-          return cc.entidad_tipo === entidadTipo && cc.entidad_id === id;
-        });
-        
-        if (tieneMovimientos || tieneCuentaCorriente) {
+        const fieldId = type === 'cliente' ? 'cliente_id' : 'proveedor_id';
+        const tipoEntidad = type === 'cliente' ? 'Cliente' : 'Proveedor';
+
+        const checks = [
+          base44.entities.Movimiento.filter({ [fieldId]: id }, '-fecha', 1),
+          base44.entities.CuentaCorriente.filter({ entidad_tipo: tipoEntidad, entidad_id: id }, '-fecha', 1)
+        ];
+        if (type === 'cliente') {
+          checks.push(base44.entities.SalidaFruta.filter({ cliente_id: id }, '-fecha', 1));
+        }
+        const results = await Promise.all(checks);
+
+        const movimientoExiste = (results[0]?.length ?? 0) > 0;
+        const ccExiste = (results[1]?.length ?? 0) > 0;
+        const salidaExiste = type === 'cliente' ? (results[2]?.length ?? 0) > 0 : false;
+
+        if (movimientoExiste || ccExiste || salidaExiste) {
           throw new Error(`No se puede eliminar: este ${type === 'cliente' ? 'cliente' : 'proveedor'} tiene historial contable`);
         }
       }
@@ -739,12 +737,13 @@ export default function ConfiguracionUnificada() {
                       queryClient.invalidateQueries({ queryKey: ['cuentacorriente'] });
                       toast.success(`Sincronización completada: ${result.proveedoresActualizados} proveedores, ${result.clientesActualizados} clientes.`);
                     } else {
-                      await ejecutarCorreccionManual(tipo, base44, queryClient);
-                      toast.success(`Corrección "${tipo}" completada exitosamente`);
+                      const result = await ejecutarCorreccionManual(tipo, base44, queryClient);
+                      const mensaje = result?.message ?? 'Proceso finalizado correctamente.';
+                      toast.success(mensaje);
                     }
                   } catch (error) {
                     console.error(`Error en corrección ${tipo}:`, error);
-                    toast.error(`Error al ejecutar: ${error.message}`);
+                    toast.error(`Error al ejecutar: ${error?.message ?? 'Error desconocido'}`);
                   } finally {
                     setEjecutandoCorreccion(null);
                     setProgresoSincronizacion('');

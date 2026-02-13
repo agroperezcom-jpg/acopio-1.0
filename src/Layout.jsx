@@ -33,6 +33,7 @@ const navItems = [
   { name: 'Inicio', icon: Home, page: 'Home' },
   { name: 'Movimiento de Fruta', icon: Apple, page: 'MovimientoFruta' },
   { name: 'Inventario', icon: Package, page: 'Inventario' },
+  { name: 'Mov. Envases', icon: ArrowLeftRight, page: 'MovimientoEnvases' },
   { name: 'Historial', icon: History, page: 'Historial' },
   { name: 'Pérdidas', icon: Apple, page: 'Perdidas' },
   { name: 'Saldos', icon: Package, page: 'SaldosEnvases' },

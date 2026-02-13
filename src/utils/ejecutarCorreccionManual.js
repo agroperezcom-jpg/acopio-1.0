@@ -4,9 +4,7 @@ import { obtenerPrecioVigente } from '@/utils/precioVigente';
 import { listAll } from '@/utils/listAllPaginado';
 
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
-const BATCH_SIZE_CC = 5;
-const DELAY_BETWEEN_BATCHES_MS = 1000;
-const DELAY_PER_OPERATION_MS = 50;
+const DELAY_PER_OPERATION_MS = 500; // Extremadamente conservador: 1 operación cada 500ms para evitar 429
 
 // Función para ejecutar correcciones manualmente
 export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
@@ -45,14 +43,17 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
       queryClient.invalidateQueries({ queryKey: ['movimientos'] });
       queryClient.invalidateQueries({ queryKey: ['salidas'] });
       queryClient.invalidateQueries({ queryKey: ['envases'] });
-      return { resultadoPerdidas, resultadoEnvases };
+      const cp = resultadoPerdidas?.corregidos ?? 0;
+      const ce = resultadoEnvases?.corregidos ?? 0;
+      return { resultadoPerdidas, resultadoEnvases, message: `Pérdidas: ${cp} productos corregidos. Envases: ${ce} corregidos.` };
     }
     case 'envasesRetroactiva': {
       const resultado = await correccionRetroactivaEnvases(base44);
       queryClient.invalidateQueries({ queryKey: ['envases'] });
       queryClient.invalidateQueries({ queryKey: ['movimientos'] });
       queryClient.invalidateQueries({ queryKey: ['salidas'] });
-      return resultado;
+      const c = resultado?.corregidos ?? 0;
+      return { ...resultado, message: `Envases retroactiva: ${c} envases corregidos.` };
     }
     case 'segregacionEnvases': {
       // Esta corrección requiere ejecutar la lógica del hook manualmente
@@ -131,7 +132,7 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
       queryClient.invalidateQueries(['envases']);
       queryClient.invalidateQueries(['movimientos']);
       queryClient.invalidateQueries(['salidas']);
-      return { corregidos, total: envases.length };
+      return { corregidos, total: envases.length, message: `Segregación: ${corregidos} envases actualizados de ${envases.length} total.` };
     }
     case 'cuentaCorriente': {
       const movimientos = await listAll(base44.entities.Movimiento, '-created_date');
@@ -162,11 +163,10 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
             monto_pagado: movimiento.monto_pagado || 0
           });
           ingresosActualizados++;
-          await delay(DELAY_PER_OPERATION_MS);
         } catch (err) {
           console.warn(`CuentaCorriente: error actualizando Movimiento ${movimiento.id}:`, err?.message || err);
         }
-        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
+        await delay(DELAY_PER_OPERATION_MS);
       }
 
       // Procesar salidas (secuencial + throttle + try/catch)
@@ -188,11 +188,10 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
             monto_cobrado: salida.monto_cobrado || 0
           });
           salidasActualizadas++;
-          await delay(DELAY_PER_OPERATION_MS);
         } catch (err) {
           console.warn(`CuentaCorriente: error actualizando SalidaFruta ${salida.id}:`, err?.message || err);
         }
-        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
+        await delay(DELAY_PER_OPERATION_MS);
       }
 
       // Crear movimientos de cuenta corriente (secuencial + throttle + try/catch)
@@ -218,11 +217,10 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
               comprobante_tipo: 'IngresoFruta'
             });
             movimientosCCCreados++;
-            await delay(DELAY_PER_OPERATION_MS);
           } catch (err) {
             console.warn(`CuentaCorriente: error creando CC IngresoFruta ${movimiento.id}:`, err?.message || err);
           }
-          if (movimientosCCCreados > 0 && movimientosCCCreados % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
+          await delay(DELAY_PER_OPERATION_MS);
         }
       }
 
@@ -244,11 +242,10 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
               comprobante_tipo: 'SalidaFruta'
             });
             movimientosCCCreados++;
-            await delay(DELAY_PER_OPERATION_MS);
           } catch (err) {
             console.warn(`CuentaCorriente: error creando CC SalidaFruta ${salida.id}:`, err?.message || err);
           }
-          if (movimientosCCCreados > 0 && movimientosCCCreados % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
+          await delay(DELAY_PER_OPERATION_MS);
         }
       }
 
@@ -276,17 +273,21 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
         const { id, saldo_resultante } = movimientosAActualizar[i];
         try {
           await base44.entities.CuentaCorriente.update(id, { saldo_resultante });
-          await delay(DELAY_PER_OPERATION_MS);
         } catch (err) {
           console.warn(`CuentaCorriente: error actualizando saldo_resultante ${id}:`, err?.message || err);
         }
-        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
+        await delay(DELAY_PER_OPERATION_MS);
       }
 
       queryClient.invalidateQueries(['movimientos']);
       queryClient.invalidateQueries(['salidas']);
       queryClient.invalidateQueries(['cuentacorriente']);
-      return { ingresosActualizados, salidasActualizadas, movimientosCCCreados };
+      return {
+        ingresosActualizados,
+        salidasActualizadas,
+        movimientosCCCreados,
+        message: `Cuenta Corriente: ${ingresosActualizados} ingresos, ${salidasActualizadas} salidas actualizados. ${movimientosCCCreados} movimientos CC creados. Saldos recalculados.`
+      };
     }
     case 'preciosSalidas': {
       const [salidas, periodosPrecios] = await Promise.all([
@@ -351,7 +352,11 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
 
       queryClient.invalidateQueries(['salidas']);
       queryClient.invalidateQueries(['cuentacorriente']);
-      return { salidasActualizadas, movimientosCCActualizados };
+      return {
+        salidasActualizadas,
+        movimientosCCActualizados,
+        message: `Precios en salidas: ${salidasActualizadas} salidas actualizadas, ${movimientosCCActualizados} movimientos CC ajustados.`
+      };
     }
     default:
       throw new Error(`Tipo de corrección desconocido: ${tipo}`);

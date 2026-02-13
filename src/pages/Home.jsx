@@ -190,7 +190,12 @@ export default function Home() {
   const modulosPrincipales = [
     { nombre: 'Movimiento de Fruta', icon: Apple, page: 'MovimientoFruta', color: 'bg-green-100 text-green-700' },
     { nombre: 'Inventario', icon: Package, page: 'Inventario', color: 'bg-teal-100 text-teal-700' },
-    { nombre: 'Mov. Envases', icon: ArrowLeftRight, page: 'MovimientoEnvases', color: 'bg-orange-100 text-orange-700' },
+    {
+      nombre: 'Mov. Envases',
+      icon: ArrowLeftRight,
+      page: 'MovimientoEnvases',
+      color: 'bg-orange-50 text-orange-600',
+    },
     { nombre: 'Tesorería', icon: Scale, page: 'Tesoreria', color: 'bg-indigo-100 text-indigo-700' },
     { nombre: 'Informes Contables', icon: FileText, page: 'InformesContables', color: 'bg-blue-100 text-blue-700' },
     { nombre: 'Historial', icon: History, page: 'Historial', color: 'bg-slate-100 text-slate-700' }

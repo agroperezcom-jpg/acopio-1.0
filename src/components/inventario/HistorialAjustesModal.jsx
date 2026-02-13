@@ -1,18 +1,67 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { format } from 'date-fns';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { TrendingUp, TrendingDown, Calendar, User, Trash2 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ajustarStockEnvase } from '@/services/StockService';
 import { usePinGuard } from '@/hooks/usePinGuard';
 
-export default function HistorialAjustesModal({ open, onClose, ajustes = [], onDelete }) {
+const PERIODO_OPTIONS = [
+  { value: 'hoy', label: 'Hoy' },
+  { value: 'este_mes', label: 'Este mes' },
+  { value: 'mes_pasado', label: 'Mes pasado' },
+  { value: 'mes_anterior', label: 'Mes anterior (hace 2 meses)' },
+];
+
+function getRangoFechas(periodo) {
+  const hoy = new Date();
+  switch (periodo) {
+    case 'hoy':
+      return { desde: startOfDay(hoy), hasta: endOfDay(hoy) };
+    case 'este_mes':
+      return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+    case 'mes_pasado':
+      const mesPasado = subMonths(hoy, 1);
+      return { desde: startOfMonth(mesPasado), hasta: endOfMonth(mesPasado) };
+    case 'mes_anterior':
+      const mesAnterior = subMonths(hoy, 2);
+      return { desde: startOfMonth(mesAnterior), hasta: endOfMonth(mesAnterior) };
+    default:
+      return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  }
+}
+
+export default function HistorialAjustesModal({ open, onClose, onDelete }) {
+  const queryClient = useQueryClient();
   const { askPin, PinGuardModal } = usePinGuard();
+  const [periodo, setPeriodo] = useState('este_mes');
   const [eliminandoId, setEliminandoId] = useState(null);
   const [error, setError] = useState('');
+
+  const { desde, hasta } = useMemo(() => getRangoFechas(periodo), [periodo]);
+
+  const { data: ajustes = [], isLoading } = useQuery({
+    queryKey: ['ajustes-manuales-historial', periodo, desde?.toISOString(), hasta?.toISOString()],
+    queryFn: () =>
+      base44.entities.AjusteManualEnvase.filter(
+        {
+          created_date: {
+            $gte: desde.toISOString(),
+            $lte: hasta.toISOString(),
+          },
+        },
+        '-created_date',
+        500
+      ),
+    enabled: open && !!desde && !!hasta,
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
 
   const handleEliminar = async (ajuste) => {
     await askPin(async () => {
@@ -25,11 +74,12 @@ export default function HistorialAjustesModal({ open, onClose, ajustes = [], onD
         }
 
         await base44.entities.AjusteManualEnvase.delete(ajuste.id);
-        
+
+        queryClient.invalidateQueries(['ajustes-manuales-historial']);
         toast.success('Ajuste eliminado correctamente');
         setEliminandoId(null);
         setError('');
-        
+
         if (onDelete) {
           onDelete();
         }
@@ -48,11 +98,29 @@ export default function HistorialAjustesModal({ open, onClose, ajustes = [], onD
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Historial de Ajustes Manuales</DialogTitle>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <DialogTitle>Historial de Ajustes Manuales</DialogTitle>
+            <Select value={periodo} onValueChange={setPeriodo}>
+              <SelectTrigger className="w-full sm:w-[220px]">
+                <SelectValue placeholder="Período" />
+              </SelectTrigger>
+              <SelectContent>
+                {PERIODO_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </DialogHeader>
 
         <div className="space-y-3">
-          {ajustes.length === 0 ? (
+          {isLoading ? (
+            <div className="text-center py-8 text-slate-500">
+              Cargando ajustes...
+            </div>
+          ) : ajustes.length === 0 ? (
             <div className="text-center py-8 text-slate-500">
               No hay ajustes manuales registrados
             </div>
@@ -115,7 +183,7 @@ export default function HistorialAjustesModal({ open, onClose, ajustes = [], onD
                         <div className="space-y-1 text-sm">
                           <div className="flex items-center gap-2 text-slate-600">
                             <Calendar className="h-3 w-3" />
-                            {format(new Date(ajuste.fecha), "dd/MM/yyyy HH:mm", { locale: es })}
+                            {format(new Date(ajuste.fecha || ajuste.created_date), "dd/MM/yyyy HH:mm", { locale: es })}
                           </div>
                           <div className="flex items-center gap-2 text-slate-600">
                             <User className="h-3 w-3" />

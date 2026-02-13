@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { History, Search, Trash2, FileDown, MessageCircle, ChevronDown, ChevronUp, Apple, Package, Filter, ShoppingCart, Edit, ChevronRight } from "lucide-react";
+import { History, Search, Trash2, FileDown, MessageCircle, ChevronDown, ChevronUp, Apple, Package, Filter, ShoppingCart, Edit, ChevronRight, Loader2 } from "lucide-react";
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { toast } from 'sonner';
@@ -28,11 +28,14 @@ import { usePinGuard } from '@/hooks/usePinGuard';
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
+import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
+import DateRangeToolbar, { getRangeForPreset, DATE_RANGE_PRESETS } from '@/components/DateRangeToolbar';
 
 export default function Historial() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState('todos');
+  const [rangoFechas, setRangoFechas] = useState(() => getRangeForPreset(DATE_RANGE_PRESETS.thisMonth));
   const [expandedId, setExpandedId] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, id: null });
   const [isDeleting, setIsDeleting] = useState(false);
@@ -40,12 +43,6 @@ export default function Historial() {
   const [isProcessing, setIsProcessing] = useState(false);
   const { askPin, PinGuardModal } = usePinGuard();
   
-  // ═══════════════════════════════════════════════════════════════════
-  // PAGINACIÓN - Mostrar TODO el historial sin cortar registros viejos
-  // ═══════════════════════════════════════════════════════════════════
-  const [paginaActual, setPaginaActual] = useState(1);
-  const registrosPorPagina = 10; // Configurable: 10-20 registros por página
-
   const PAGE_SIZE = 20;
 
   // Filtro servidor: por tipo de movimiento (evita traer todos y filtrar en cliente)
@@ -56,6 +53,11 @@ export default function Historial() {
     return {};
   }, [tipoFilter]);
 
+  const fechaDesde = rangoFechas?.desde;
+  const fechaHasta = rangoFechas?.hasta;
+  const fechaDesdeStr = fechaDesde?.toISOString?.();
+  const fechaHastaStr = fechaHasta?.toISOString?.();
+
   const {
     data: movimientosData,
     fetchNextPage: fetchMoreMovimientos,
@@ -63,18 +65,22 @@ export default function Historial() {
     isFetchingNextPage: loadingMoreMovimientos,
     isLoading: loadingMov
   } = useInfiniteQuery({
-    queryKey: ['movimientos-infinite', tipoFilter],
+    queryKey: ['movimientos-infinite', tipoFilter, fechaDesdeStr, fechaHastaStr],
     queryFn: ({ pageParam = 0 }) => {
       if (tipoFilter === 'Salida de Fruta') return Promise.resolve([]);
-      if (Object.keys(queryMovimientos).length === 0) {
-        return base44.entities.Movimiento.list('-created_date', PAGE_SIZE, pageParam);
-      }
-      return base44.entities.Movimiento.filter(queryMovimientos, '-created_date', PAGE_SIZE, pageParam);
+      const filter = {
+        ...queryMovimientos,
+        fecha: {
+          $gte: fechaDesde.toISOString(),
+          $lte: fechaHasta.toISOString()
+        }
+      };
+      return base44.entities.Movimiento.filter(filter, '-created_date', PAGE_SIZE, pageParam);
     },
     getNextPageParam: (lastPage, allPages) =>
       (lastPage?.length ?? 0) === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
     initialPageParam: 0,
-    enabled: tipoFilter !== 'Salida de Fruta',
+    enabled: tipoFilter !== 'Salida de Fruta' && !!fechaDesde && !!fechaHasta,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
@@ -86,13 +92,23 @@ export default function Historial() {
     isFetchingNextPage: loadingMoreSalidas,
     isLoading: loadingSal
   } = useInfiniteQuery({
-    queryKey: ['salidas-infinite', tipoFilter],
+    queryKey: ['salidas-infinite', tipoFilter, fechaDesdeStr, fechaHastaStr],
     queryFn: ({ pageParam = 0 }) =>
-      base44.entities.SalidaFruta.list('-created_date', PAGE_SIZE, pageParam),
+      base44.entities.SalidaFruta.filter(
+        {
+          fecha: {
+            $gte: fechaDesde.toISOString(),
+            $lte: fechaHasta.toISOString()
+          }
+        },
+        '-created_date',
+        PAGE_SIZE,
+        pageParam
+      ),
     getNextPageParam: (lastPage, allPages) =>
       (lastPage?.length ?? 0) === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
     initialPageParam: 0,
-    enabled: tipoFilter === 'todos' || tipoFilter === 'Salida de Fruta',
+    enabled: (tipoFilter === 'todos' || tipoFilter === 'Salida de Fruta') && !!fechaDesde && !!fechaHasta,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
@@ -226,39 +242,6 @@ export default function Historial() {
     );
   }, [todosLosRegistros, search]);
   
-  // Reset página cuando cambien los filtros (evita loop infinito)
-  React.useEffect(() => {
-    setPaginaActual(1);
-  }, [search, tipoFilter]);
-  
-  // Calcular paginación
-  const totalPaginas = Math.ceil(filteredMovimientos.length / registrosPorPagina);
-  const indiceInicio = (paginaActual - 1) * registrosPorPagina;
-  const indiceFin = indiceInicio + registrosPorPagina;
-  const registrosPaginados = filteredMovimientos.slice(indiceInicio, indiceFin);
-  
-  // Generar números de páginas para mostrar
-  const generarNumerosPaginas = () => {
-    const paginas = [];
-    const maxPaginasVisibles = 5;
-    
-    if (totalPaginas <= maxPaginasVisibles) {
-      for (let i = 1; i <= totalPaginas; i++) {
-        paginas.push(i);
-      }
-    } else {
-      if (paginaActual <= 3) {
-        paginas.push(1, 2, 3, 4, '...', totalPaginas);
-      } else if (paginaActual >= totalPaginas - 2) {
-        paginas.push(1, '...', totalPaginas - 3, totalPaginas - 2, totalPaginas - 1, totalPaginas);
-      } else {
-        paginas.push(1, '...', paginaActual - 1, paginaActual, paginaActual + 1, '...', totalPaginas);
-      }
-    }
-    
-    return paginas;
-  };
-
   const handleDelete = async () => {
     if (!deleteDialog.id || !deleteDialog.tipo || !deleteDialog.registro) return;
     setIsDeleting(true);
@@ -317,6 +300,25 @@ export default function Historial() {
             const deltaOcupados = -ajustes.ingresoOcupados + ajustes.salidaOcupados;
             const deltaVacios = -ajustes.ingresoVacios + ajustes.salidaVacios;
             await ajustarStockEnvase(base44, envaseId, deltaOcupados, deltaVacios);
+          }
+        }
+
+        // Revertir saldo vivo de envases (deuda)
+        if (registro.envases_llenos?.length && registro.proveedor_id) {
+          for (const e of registro.envases_llenos) {
+            if (e.envase_tipo && (e.cantidad || 0) !== 0) {
+              await actualizarDeudaEnvase(base44, 'Proveedor', registro.proveedor_id, e.envase_tipo, e.cantidad || 0);
+            }
+          }
+        }
+        if (registro.movimiento_envases?.length) {
+          for (const e of registro.movimiento_envases) {
+            const tipo = e.envase_tipo;
+            if (!tipo) continue;
+            const ing = (e.cantidad_ingreso || 0);
+            const sal = (e.cantidad_salida || 0);
+            if (registro.proveedor_id) await actualizarDeudaEnvase(base44, 'Proveedor', registro.proveedor_id, tipo, ing - sal);
+            if (registro.cliente_id) await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, tipo, sal - ing);
           }
         }
 
@@ -400,6 +402,22 @@ export default function Historial() {
             const deltaOcupados = -ajustes.ingresoOcupados + ajustes.salidaOcupados;
             const deltaVacios = -ajustes.ingresoVacios + ajustes.salidaVacios;
             await ajustarStockEnvase(base44, envaseId, deltaOcupados, deltaVacios);
+          }
+        }
+
+        // Revertir saldo vivo de envases (deuda) de la salida
+        if (registro.envases_llenos?.length && registro.cliente_id) {
+          for (const e of registro.envases_llenos) {
+            if (e.envase_tipo && (e.cantidad || 0) !== 0) {
+              await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, e.envase_tipo, e.cantidad || 0);
+            }
+          }
+        }
+        if (registro.movimiento_envases?.length && registro.cliente_id) {
+          for (const e of registro.movimiento_envases) {
+            if (!e.envase_tipo) continue;
+            const delta = (e.cantidad_salida || 0) - (e.cantidad_ingreso || 0);
+            if (delta !== 0) await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, e.envase_tipo, delta);
           }
         }
 
@@ -654,7 +672,7 @@ export default function Historial() {
 
         {/* Filtros */}
         <Card className="border-0 shadow-lg shadow-slate-200/50 mb-6">
-          <CardContent className="p-4">
+          <CardContent className="p-4 space-y-4">
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -680,20 +698,13 @@ export default function Historial() {
                 </Select>
               </div>
             </div>
+            <DateRangeToolbar
+              onRangeChange={({ desde, hasta }) => setRangoFechas({ desde, hasta })}
+              defaultRange={DATE_RANGE_PRESETS.thisMonth}
+              className="border-t border-slate-100 pt-4"
+            />
           </CardContent>
         </Card>
-
-        {/* Información de paginación */}
-        {!isLoading && filteredMovimientos.length > 0 && (
-          <div className="flex items-center justify-between px-4 py-2 bg-slate-50 rounded-lg mb-4">
-            <p className="text-sm text-slate-600">
-              Mostrando <strong>{indiceInicio + 1}</strong> a <strong>{Math.min(indiceFin, filteredMovimientos.length)}</strong> de <strong>{filteredMovimientos.length}</strong> registros
-            </p>
-            <p className="text-sm text-slate-500">
-              Página {paginaActual} de {totalPaginas}
-            </p>
-          </div>
-        )}
 
         {/* Lista de Movimientos */}
         <div className="space-y-4">
@@ -704,7 +715,7 @@ export default function Historial() {
               No se encontraron movimientos
             </div>
           ) : (
-            registrosPaginados.map((mov) => (
+            filteredMovimientos.map((mov) => (
               <Card key={mov.id} className="border-0 shadow-md hover:shadow-lg transition-shadow">
                 <CardHeader className="p-4 pb-0">
                   <div className="flex items-start justify-between gap-4">
@@ -1024,107 +1035,32 @@ export default function Historial() {
             ))
           )}
 
-          {/* Cargar más (paginación en servidor) */}
+          {/* Cargar más (feed continuo) */}
           {!isLoading && filteredMovimientos.length > 0 && hasMore && (
-            <Card className="border-0 shadow-md mt-4">
-              <CardContent className="p-4 text-center">
-                <Button
-                  variant="outline"
-                  disabled={loadingMore}
-                  onClick={() => {
-                    if (hasMoreMovimientos) fetchMoreMovimientos();
-                    if (hasMoreSalidas) fetchMoreSalidas();
-                  }}
-                  className="w-full sm:w-auto"
-                >
-                  {loadingMore ? (
-                    <>Cargando...</>
-                  ) : (
-                    <>
-                      <ChevronRight className="h-4 w-4 mr-2" />
-                      Cargar más (20 movimientos + 20 salidas)
-                    </>
-                  )}
-                </Button>
-                <p className="text-xs text-slate-500 mt-2">
-                  {movimientos.length} movimientos, {salidas.length} salidas cargados
-                </p>
-              </CardContent>
-            </Card>
+            <div className="mt-4 flex justify-center">
+              <Button
+                variant="ghost"
+                disabled={loadingMore}
+                onClick={() => {
+                  if (hasMoreMovimientos) fetchMoreMovimientos();
+                  if (hasMoreSalidas) fetchMoreSalidas();
+                }}
+                className="w-full max-w-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Cargando...
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-4 w-4 mr-2" />
+                    Cargar movimientos anteriores
+                  </>
+                )}
+              </Button>
+            </div>
           )}
-        </div>
-
-        {/* Controles de paginación */}
-        {!isLoading && filteredMovimientos.length > 0 && totalPaginas > 1 && (
-          <Card className="border-0 shadow-lg shadow-slate-200/50 mt-6">
-            <CardContent className="p-4">
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                {/* Botón Anterior */}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPaginaActual(p => Math.max(1, p - 1))}
-                  disabled={paginaActual === 1}
-                  className="w-full sm:w-auto"
-                >
-                  ← Anterior
-                </Button>
-
-                {/* Números de página */}
-                <div className="flex flex-wrap items-center justify-center gap-1">
-                  {generarNumerosPaginas().map((pagina, idx) => (
-                    pagina === '...' ? (
-                      <span key={`ellipsis-${idx}`} className="px-2 py-1 text-slate-400">...</span>
-                    ) : (
-                      <Button
-                        key={pagina}
-                        variant={paginaActual === pagina ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setPaginaActual(pagina)}
-                        className={`min-w-[2.5rem] ${
-                          paginaActual === pagina 
-                            ? 'bg-slate-800 hover:bg-slate-700' 
-                            : 'hover:bg-slate-100'
-                        }`}
-                      >
-                        {pagina}
-                      </Button>
-                    )
-                  ))}
-                </div>
-
-                {/* Botón Siguiente */}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPaginaActual(p => Math.min(totalPaginas, p + 1))}
-                  disabled={paginaActual === totalPaginas}
-                  className="w-full sm:w-auto"
-                >
-                  Siguiente →
-                </Button>
-              </div>
-
-              {/* Selector de página directa (móvil friendly) */}
-              <div className="flex items-center justify-center gap-2 mt-4 pt-4 border-t border-slate-100">
-                <label className="text-sm text-slate-600">Ir a página:</label>
-                <Select
-                  value={paginaActual.toString()}
-                  onValueChange={(val) => setPaginaActual(parseInt(val))}
-                >
-                  <SelectTrigger className="w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: totalPaginas }, (_, i) => i + 1).map(p => (
-                      <SelectItem key={p} value={p.toString()}>{p}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-        )}
       </div>
 
       <AlertDialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog({ open, id: deleteDialog.id, tipo: deleteDialog.tipo, registro: deleteDialog.registro })}>

@@ -18,6 +18,7 @@ import { agruparKilosPorProducto } from '@/components/utils/precisionDecimal';
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { actualizarSaldoEntidad } from '@/utils/contabilidad';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
+import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function IngresoFruta({ embedded = false }) {
   const navigate = useNavigate();
@@ -233,6 +234,13 @@ export default function IngresoFruta({ embedded = false }) {
       for (const envLleno of movimiento.envases_llenos || []) {
         if (envLleno.cantidad > 0 && envLleno.envase_id) {
           await ajustarStockEnvase(base44, envLleno.envase_id, envLleno.cantidad, 0);
+        }
+      }
+
+      // Actualizar saldo vivo de envases (proveedor devuelve llenos = reduce deuda)
+      for (const envLleno of movimiento.envases_llenos || []) {
+        if (envLleno.cantidad > 0 && envLleno.envase_tipo && proveedorId) {
+          await actualizarDeudaEnvase(base44, 'Proveedor', proveedorId, envLleno.envase_tipo, -envLleno.cantidad);
         }
       }
       

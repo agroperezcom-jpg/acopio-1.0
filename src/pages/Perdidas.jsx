@@ -12,19 +12,38 @@ import DateRangeToolbar from '@/components/DateRangeToolbar';
 export default function Perdidas() {
   const [rango, setRango] = useState(null);
 
+  const PAGE_SIZE = 500;
+
   const { data: salidas = [], isLoading, error } = useQuery({
     queryKey: ['salidas-confirmadas-perdidas', rango?.desde, rango?.hasta],
     queryFn: async () => {
       const desde = rango.desde.toISOString();
       const hasta = rango.hasta.toISOString();
-      return base44.entities.SalidaFruta.filter(
-        {
-          estado: 'Confirmada',
-          fecha: { $gte: desde, $lte: hasta }
-        },
-        '-fecha',
-        500
-      );
+      const filter = {
+        estado: 'Confirmada',
+        fecha: { $gte: desde, $lte: hasta }
+      };
+
+      let allSalidas = [];
+      let page = 0;
+
+      while (true) {
+        const batch = await base44.entities.SalidaFruta.filter(
+          filter,
+          '-fecha',
+          PAGE_SIZE,
+          page * PAGE_SIZE
+        );
+
+        allSalidas = [...allSalidas, ...(Array.isArray(batch) ? batch : [batch])];
+
+        if ((Array.isArray(batch) ? batch.length : 0) < PAGE_SIZE) break;
+
+        page++;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      return allSalidas;
     },
     enabled: !!rango?.desde && !!rango?.hasta,
     staleTime: 5 * 60 * 1000,

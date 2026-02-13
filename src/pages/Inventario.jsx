@@ -12,11 +12,13 @@ import { toFixed2, sumaExacta } from "../components/utils/precisionDecimal";
 import { toast } from "sonner";
 import AjusteManualEnvaseModal from '@/components/inventario/AjusteManualEnvaseModal';
 import HistorialAjustesModal from '@/components/inventario/HistorialAjustesModal';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import DateRangeToolbar, { getRangeForPreset, DATE_RANGE_PRESETS } from '@/components/DateRangeToolbar';
+
+const HISTORIAL_PAGE_SIZE = 200;
 
 export default function Inventario() {
   const queryClient = useQueryClient();
-  const [rangoHistorial, setRangoHistorial] = useState(null);
+  const [rangoHistorial, setRangoHistorial] = useState(() => getRangeForPreset(DATE_RANGE_PRESETS.thisMonth));
   const [search, setSearch] = useState('');
   const [selectedProducto, setSelectedProducto] = useState(null);
   const [ajusteModal, setAjusteModal] = useState({ open: false, envase: null, tipoAjuste: null, stockActual: 0 });
@@ -31,14 +33,14 @@ export default function Inventario() {
   });
 
   const { data: movimientos = [], error: errorMov } = useQuery({
-    queryKey: ['movimientos-inventario', rangoHistorial?.desde, rangoHistorial?.hasta],
+    queryKey: ['movimientos-inventario', rangoHistorial?.desde?.toISOString?.(), rangoHistorial?.hasta?.toISOString?.()],
     queryFn: async () => {
       const desde = rangoHistorial.desde.toISOString();
       const hasta = rangoHistorial.hasta.toISOString();
       return base44.entities.Movimiento.filter(
         { fecha: { $gte: desde, $lte: hasta } },
         '-fecha',
-        1000
+        HISTORIAL_PAGE_SIZE
       );
     },
     enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
@@ -47,14 +49,14 @@ export default function Inventario() {
   });
 
   const { data: salidas = [], error: errorSal } = useQuery({
-    queryKey: ['salidas-inventario', rangoHistorial?.desde, rangoHistorial?.hasta],
+    queryKey: ['salidas-inventario', rangoHistorial?.desde?.toISOString?.(), rangoHistorial?.hasta?.toISOString?.()],
     queryFn: async () => {
       const desde = rangoHistorial.desde.toISOString();
       const hasta = rangoHistorial.hasta.toISOString();
       return base44.entities.SalidaFruta.filter(
         { fecha: { $gte: desde, $lte: hasta } },
         '-fecha',
-        1000
+        HISTORIAL_PAGE_SIZE
       );
     },
     enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
@@ -66,13 +68,6 @@ export default function Inventario() {
     queryKey: ['envases'],
     queryFn: () => base44.entities.Envase.list(),
     staleTime: 10 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  const { data: ajustesManuales = [] } = useQuery({
-    queryKey: ['ajustes-manuales'],
-    queryFn: () => base44.entities.AjusteManualEnvase.list('-fecha', 100),
-    staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
@@ -547,9 +542,7 @@ export default function Inventario() {
       <HistorialAjustesModal
         open={historialModal}
         onClose={() => setHistorialModal(false)}
-        ajustes={ajustesManuales}
         onDelete={() => {
-          queryClient.invalidateQueries(['ajustes-manuales']);
           queryClient.invalidateQueries(['envases']);
           toast.success('El ajuste ha sido eliminado y el stock recalculado');
         }}

@@ -25,6 +25,7 @@ import GenericSuccessModal from '@/components/GenericSuccessModal';
 import ConfirmEnvaseModal from '@/components/ConfirmEnvaseModal';
 import { descargarPDFMovimientoEnvases, compartirWhatsAppMovimientoEnvases } from '@/components/MovimientoEnvasesPDFGenerator';
 import { ajustarStockEnvase } from '@/services/StockService';
+import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function MovimientoEnvases() {
   const navigate = useNavigate();
@@ -209,6 +210,21 @@ export default function MovimientoEnvases() {
           if (deltaVacios !== 0) {
             await ajustarStockEnvase(base44, envaseData.id, 0, deltaVacios);
           }
+        }
+      }
+
+      const entidadId = tipoEntidad === 'Proveedor' ? proveedorId : clienteId;
+      for (const envase of movimiento.movimiento_envases) {
+        const tipoEnvase = envase.envase_tipo || envasesList.find(e => e.id === envase.envase_id)?.tipo;
+        if (!tipoEnvase || !entidadId) continue;
+        const ingreso = parseInt(envase.cantidad_ingreso) || 0;
+        const salida = parseInt(envase.cantidad_salida) || 0;
+        if (tipoEntidad === 'Proveedor') {
+          const delta = salida - ingreso;
+          if (delta !== 0) await actualizarDeudaEnvase(base44, 'Proveedor', entidadId, tipoEnvase, delta);
+        } else {
+          const delta = ingreso - salida;
+          if (delta !== 0) await actualizarDeudaEnvase(base44, 'Cliente', entidadId, tipoEnvase, delta);
         }
       }
       

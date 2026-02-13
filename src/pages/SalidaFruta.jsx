@@ -19,6 +19,7 @@ import { toFixed2 } from "@/components/utils/precisionDecimal";
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { actualizarSaldoEntidad } from '@/utils/contabilidad';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
+import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function SalidaFruta({ embedded = false }) {
   const queryClient = useQueryClient();
@@ -302,6 +303,13 @@ export default function SalidaFruta({ embedded = false }) {
       for (const envLleno of nuevaSalida.envases_llenos || []) {
         if (envLleno.cantidad > 0 && envLleno.envase_id) {
           await ajustarStockEnvase(base44, envLleno.envase_id, -envLleno.cantidad, 0);
+        }
+      }
+
+      // Actualizar saldo vivo de envases (envíos llenos al cliente = reducen deuda acopio→cliente)
+      for (const envLleno of nuevaSalida.envases_llenos || []) {
+        if (envLleno.cantidad > 0 && envLleno.envase_tipo && clienteId) {
+          await actualizarDeudaEnvase(base44, 'Cliente', clienteId, envLleno.envase_tipo, -envLleno.cantidad);
         }
       }
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Wrench, Loader2, RefreshCw } from "lucide-react";
+import { Wrench, Loader2, RefreshCw, Package } from "lucide-react";
 
 export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarCorreccion, progresoSincronizacion = '' }) {
   const correcciones = [
@@ -11,6 +11,13 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
       descripcion: 'Recalcula saldo_actual de cada Proveedor y Cliente desde el historial de movimientos (por lotes, sin saturar la API).',
       tipo: 'sincronizarSaldos',
       icon: RefreshCw
+    },
+    {
+      id: 'correccionSaldosEnvases',
+      titulo: 'Inicializar saldos de envases',
+      descripcion: 'Recalcula saldo_envases de cada Proveedor y Cliente desde todo el historial (Ingresos, Salidas, Movimientos de Envases). Sincroniza con la nueva estructura de datos.',
+      tipo: 'correccionSaldosEnvases',
+      icon: Package
     },
     {
       id: 'autoRetroactiva',
@@ -64,7 +71,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
           <CardTitle>Procesos de Corrección</CardTitle>
         </CardHeader>
         <CardContent>
-          {progresoSincronizacion && ejecutandoCorreccion === 'sincronizarSaldos' && (
+          {progresoSincronizacion && (ejecutandoCorreccion === 'sincronizarSaldos' || ejecutandoCorreccion === 'correccionSaldosEnvases') && (
             <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
               <p className="font-medium">Progreso:</p>
               <p className="mt-1">{progresoSincronizacion}</p>
@@ -74,6 +81,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
             {correcciones.map((correccion) => {
               const Icon = correccion.icon || Wrench;
               const esSincronizar = correccion.tipo === 'sincronizarSaldos';
+              const esSaldosEnvases = correccion.tipo === 'correccionSaldosEnvases';
               return (
                 <div
                   key={correccion.id}
@@ -90,12 +98,12 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
                     {ejecutandoCorreccion === correccion.tipo ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {esSincronizar ? 'Sincronizando...' : 'Ejecutando...'}
+                        {esSincronizar ? 'Sincronizando...' : esSaldosEnvases ? 'Inicializando saldos...' : 'Ejecutando...'}
                       </>
                     ) : (
                       <>
                         <Icon className="h-4 w-4 mr-2" />
-                        {esSincronizar ? 'Sincronizar Saldos' : 'Ejecutar Corrección'}
+                        {esSincronizar ? 'Sincronizar Saldos' : esSaldosEnvases ? 'Inicializar saldos de envases' : 'Ejecutar Corrección'}
                       </>
                     )}
                   </Button>

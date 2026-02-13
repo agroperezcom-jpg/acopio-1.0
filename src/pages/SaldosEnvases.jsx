@@ -4,261 +4,117 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Package, AlertTriangle, CheckCircle, User, Users, ChevronDown, ChevronUp, FileDown, MessageCircle, Search } from "lucide-react";
+import { Package, AlertTriangle, CheckCircle, User, Users, FileDown, MessageCircle, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { downloadResumenSaldosPDF } from '../components/PDFGenerator';
 import { Button } from "@/components/ui/button";
-import { format, subDays, endOfDay } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { format } from 'date-fns';
 
-const RANGO_DIAS_DEFAULT = 90;
+const PAGE_SIZE = 500;
 
 export default function SaldosEnvases() {
-  const [vistaActual, setVistaActual] = useState('saldos'); // 'saldos', 'stock' o 'pagados'
+  const [vistaActual, setVistaActual] = useState('saldos');
   const [filtroTipo, setFiltroTipo] = useState('Ambos');
-  const [expandedEntity, setExpandedEntity] = useState(null);
   const [busqueda, setBusqueda] = useState('');
 
-  const { desde, hasta } = useMemo(() => {
-    const hoy = new Date();
-    return {
-      desde: subDays(hoy, RANGO_DIAS_DEFAULT),
-      hasta: endOfDay(hoy)
-    };
-  }, []);
-
-  const desdeISO = desde?.toISOString?.();
-  const hastaISO = hasta?.toISOString?.();
-
-  const { data: movimientos = [], isLoading: loadingMov, error: errorMov } = useQuery({
-    queryKey: ['movimientos-saldosenvases', desdeISO, hastaISO],
-    queryFn: () => base44.entities.Movimiento.filter(
-      { fecha: { $gte: desdeISO, $lte: hastaISO } },
-      '-fecha',
-      500
-    ),
-    enabled: !!desdeISO && !!hastaISO,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
   const { data: proveedores = [], isLoading: loadingProv } = useQuery({
-    queryKey: ['proveedores'],
-    queryFn: () => base44.entities.Proveedor.list('nombre', 500),
+    queryKey: ['proveedores-saldosenvases', busqueda],
+    queryFn: async () => {
+      if (busqueda.trim()) {
+        try {
+          const filtered = await base44.entities.Proveedor.filter(
+            { nombre: { $regex: busqueda.trim(), $options: 'i' } },
+            'nombre',
+            PAGE_SIZE
+          );
+          return Array.isArray(filtered) ? filtered : [filtered];
+        } catch {
+          const list = await base44.entities.Proveedor.list('nombre', PAGE_SIZE);
+          return (Array.isArray(list) ? list : []).filter(p =>
+            (p.nombre || '').toLowerCase().includes(busqueda.toLowerCase())
+          );
+        }
+      }
+      return base44.entities.Proveedor.list('nombre', PAGE_SIZE);
+    },
     staleTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
   const { data: clientes = [], isLoading: loadingCli } = useQuery({
-    queryKey: ['clientes'],
-    queryFn: () => base44.entities.Cliente.list('nombre', 500),
+    queryKey: ['clientes-saldosenvases', busqueda],
+    queryFn: async () => {
+      if (busqueda.trim()) {
+        try {
+          const filtered = await base44.entities.Cliente.filter(
+            { nombre: { $regex: busqueda.trim(), $options: 'i' } },
+            'nombre',
+            PAGE_SIZE
+          );
+          return Array.isArray(filtered) ? filtered : [filtered];
+        } catch {
+          const list = await base44.entities.Cliente.list('nombre', PAGE_SIZE);
+          return (Array.isArray(list) ? list : []).filter(c =>
+            (c.nombre || '').toLowerCase().includes(busqueda.toLowerCase())
+          );
+        }
+      }
+      return base44.entities.Cliente.list('nombre', PAGE_SIZE);
+    },
     staleTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
-  const { data: salidas = [], isLoading: loadingSal, error: errorSal } = useQuery({
-    queryKey: ['salidas-saldosenvases', desdeISO, hastaISO],
-    queryFn: () => base44.entities.SalidaFruta.filter(
-      { fecha: { $gte: desdeISO, $lte: hastaISO } },
-      '-fecha',
-      500
-    ),
-    enabled: !!desdeISO && !!hastaISO,
-    staleTime: 5 * 60 * 1000,
+  const { data: envases = [], isLoading: loadingEnv } = useQuery({
+    queryKey: ['envases'],
+    queryFn: () => base44.entities.Envase.list('tipo', 200),
+    staleTime: 10 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
   const todosLosSaldos = useMemo(() => {
-    const saldos = {};
-    
-    // Procesar movimientos de proveedores (envases vacíos)
-    movimientos.forEach(m => {
-      if (m.proveedor_id && m.movimiento_envases) {
-        const key = `proveedor_${m.proveedor_id}`;
-        if (!saldos[key]) {
-          const prov = proveedores.find(p => p.id === m.proveedor_id);
-          saldos[key] = {
-            id: m.proveedor_id,
-            nombre: m.proveedor_nombre || prov?.nombre || 'Desconocido',
-            tipo: 'Proveedor',
-            whatsapp: prov?.whatsapp,
-            envases: {},
-            historial: []
-          };
-        }
-        
-        m.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!saldos[key].envases[e.envase_tipo]) {
-            saldos[key].envases[e.envase_tipo] = 0;
-          }
-          saldos[key].envases[e.envase_tipo] += (e.cantidad_salida || 0) - (e.cantidad_ingreso || 0);
-        });
-        
-        // Agregar al historial
-        saldos[key].historial.push({
-          fecha: m.fecha,
-          tipo: m.tipo_movimiento,
-          envases: m.movimiento_envases
-        });
-      }
-    });
+    const lista = [];
 
-    // Procesar ENVASES LLENOS en Ingreso de Fruta (devolución del proveedor)
-    movimientos.forEach(m => {
-      if (m.proveedor_id && m.tipo_movimiento === 'Ingreso de Fruta' && m.envases_llenos) {
-        const key = `proveedor_${m.proveedor_id}`;
-        if (!saldos[key]) {
-          const prov = proveedores.find(p => p.id === m.proveedor_id);
-          saldos[key] = {
-            id: m.proveedor_id,
-            nombre: m.proveedor_nombre || prov?.nombre || 'Desconocido',
-            tipo: 'Proveedor',
-            whatsapp: prov?.whatsapp,
-            envases: {},
-            historial: []
-          };
-        }
-        
-        // Los envases llenos que entrega el proveedor REDUCEN su deuda
-        m.envases_llenos.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!saldos[key].envases[e.envase_tipo]) {
-            saldos[key].envases[e.envase_tipo] = 0;
-          }
-          saldos[key].envases[e.envase_tipo] -= (e.cantidad || 0);
-        });
-        
-        // Agregar al historial
-        if (m.envases_llenos.length > 0) {
-          saldos[key].historial.push({
-            fecha: m.fecha,
-            tipo: 'Ingreso de Fruta (Envases Llenos)',
-            envases: m.envases_llenos.map(e => ({
-              envase_tipo: e.envase_tipo,
-              cantidad_ingreso: e.cantidad,
-              cantidad_salida: 0
-            }))
-          });
-        }
-      }
-    });
-
-    // Procesar movimientos de clientes (DEUDA DEL ACOPIO HACIA CLIENTES)
-    // Cuando cliente INGRESA envases → acopio le debe al cliente
-    // Cuando acopio DEVUELVE (salida) → reduce deuda del acopio
-    movimientos.forEach(m => {
-      if (m.cliente_id && m.movimiento_envases) {
-        const key = `cliente_${m.cliente_id}`;
-        if (!saldos[key]) {
-          const cli = clientes.find(c => c.id === m.cliente_id);
-          saldos[key] = {
-            id: m.cliente_id,
-            nombre: m.cliente_nombre || cli?.nombre || 'Desconocido',
-            tipo: 'Cliente',
-            whatsapp: cli?.whatsapp,
-            envases: {},
-            historial: []
-          };
-        }
-        
-        m.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!saldos[key].envases[e.envase_tipo]) {
-            saldos[key].envases[e.envase_tipo] = 0;
-          }
-          // INVERTIDO: ingreso suma (acopio debe), salida resta (acopio devuelve)
-          saldos[key].envases[e.envase_tipo] += (e.cantidad_ingreso || 0) - (e.cantidad_salida || 0);
-        });
-        
-        saldos[key].historial.push({
-          fecha: m.fecha,
-          tipo: m.tipo_movimiento,
-          envases: m.movimiento_envases
-        });
-      }
-    });
-    
-    // Procesar envases LLENOS en salidas de fruta (REDUCEN la deuda hacia cliente)
-    salidas.forEach(s => {
-      if (s.cliente_id && s.envases_llenos?.length > 0) {
-        const key = `cliente_${s.cliente_id}`;
-        if (!saldos[key]) {
-          const cli = clientes.find(c => c.id === s.cliente_id);
-          saldos[key] = {
-            id: s.cliente_id,
-            nombre: s.cliente_nombre || cli?.nombre || 'Desconocido',
-            tipo: 'Cliente',
-            whatsapp: cli?.whatsapp,
-            envases: {},
-            historial: []
-          };
-        }
-        
-        s.envases_llenos.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!saldos[key].envases[e.envase_tipo]) {
-            saldos[key].envases[e.envase_tipo] = 0;
-          }
-          // RESTAR: cuando le mandas envases llenos al cliente, reduces lo que le debes
-          saldos[key].envases[e.envase_tipo] -= (e.cantidad || 0);
-        });
-        
-        // Agregar al historial
-        saldos[key].historial.push({
-          fecha: s.fecha,
-          tipo: 'Salida de Fruta',
-          remito: s.numero_remito,
-          envases_llenos: s.envases_llenos
-        });
-      }
-    });
-
-    // Procesar envases vacíos en salidas de fruta (DEUDA DEL ACOPIO HACIA CLIENTES)
-    salidas.forEach(s => {
-      if (s.cliente_id && s.movimiento_envases) {
-        const key = `cliente_${s.cliente_id}`;
-        if (!saldos[key]) {
-          const cli = clientes.find(c => c.id === s.cliente_id);
-          saldos[key] = {
-            id: s.cliente_id,
-            nombre: s.cliente_nombre || cli?.nombre || 'Desconocido',
-            tipo: 'Cliente',
-            whatsapp: cli?.whatsapp,
-            envases: {},
-            historial: []
-          };
-        }
-        
-        s.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!saldos[key].envases[e.envase_tipo]) {
-            saldos[key].envases[e.envase_tipo] = 0;
-          }
-          // INVERTIDO: ingreso suma (acopio debe), salida resta (acopio devuelve)
-          saldos[key].envases[e.envase_tipo] += (e.cantidad_ingreso || 0) - (e.cantidad_salida || 0);
-        });
-      }
-    });
-
-    // Convertir a array y calcular totales (incluir TODOS, incluso los pagados)
-    return Object.values(saldos)
-      .map(s => {
-        const envasesArray = Object.entries(s.envases)
-          .map(([tipo, saldo]) => ({ tipo, saldo: Math.max(0, saldo) }));
-
-        const totalAdeudado = envasesArray.reduce((sum, e) => sum + e.saldo, 0);
-
-        return {
-          ...s,
+    proveedores.forEach(p => {
+      const saldoEnvases = p.saldo_envases && typeof p.saldo_envases === 'object' ? p.saldo_envases : {};
+      const envasesArray = Object.entries(saldoEnvases)
+        .map(([tipo, saldo]) => ({ tipo, saldo: Math.max(0, Number(saldo) || 0) }))
+        .filter(e => e.saldo > 0);
+      const totalAdeudado = envasesArray.reduce((sum, e) => sum + e.saldo, 0);
+      if (Object.keys(saldoEnvases).length > 0) {
+        lista.push({
+          id: p.id,
+          nombre: p.nombre || 'Desconocido',
+          tipo: 'Proveedor',
+          whatsapp: p.whatsapp,
           envases: envasesArray,
           totalAdeudado,
-          historial: s.historial.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
-        };
-      })
-      .filter(s => s.historial.length > 0) // Solo los que tienen historial
-      .sort((a, b) => b.totalAdeudado - a.totalAdeudado);
-    }, [movimientos, salidas, proveedores, clientes]);
+          historial: []
+        });
+      }
+    });
+
+    clientes.forEach(c => {
+      const saldoEnvases = c.saldo_envases && typeof c.saldo_envases === 'object' ? c.saldo_envases : {};
+      const envasesArray = Object.entries(saldoEnvases)
+        .map(([tipo, saldo]) => ({ tipo, saldo: Math.max(0, Number(saldo) || 0) }))
+        .filter(e => e.saldo > 0);
+      const totalAdeudado = envasesArray.reduce((sum, e) => sum + e.saldo, 0);
+      if (Object.keys(saldoEnvases).length > 0) {
+        lista.push({
+          id: c.id,
+          nombre: c.nombre || 'Desconocido',
+          tipo: 'Cliente',
+          whatsapp: c.whatsapp,
+          envases: envasesArray,
+          totalAdeudado,
+          historial: []
+        });
+      }
+    });
+
+    return lista.sort((a, b) => b.totalAdeudado - a.totalAdeudado);
+  }, [proveedores, clientes]);
 
   const generarPDFSaldo = (entidad) => {
     const html = `
@@ -283,26 +139,6 @@ export default function SaldosEnvases() {
           <p>${entidad.tipo}: ${entidad.nombre}</p>
           <p>Fecha: ${format(new Date(), 'dd/MM/yyyy HH:mm')}</p>
         </div>
-        
-        <h3>Historial de Movimientos</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Fecha</th>
-              <th>Tipo</th>
-              <th>Detalle</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${entidad.historial.map(h => `
-              <tr>
-                <td>${format(new Date(h.fecha), 'dd/MM/yyyy HH:mm')}</td>
-                <td>${h.tipo}</td>
-                <td>${(h.envases || []).map(e => `${e.envase_tipo}: +${e.cantidad_ingreso||0}/-${e.cantidad_salida||0}`).join(', ')}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
 
         <h3>Saldo Actual</h3>
         <table>
@@ -313,7 +149,7 @@ export default function SaldosEnvases() {
             </tr>
           </thead>
           <tbody>
-            ${entidad.envases.map(e => `
+            ${(entidad.envases || []).map(e => `
               <tr>
                 <td>${e.tipo}</td>
                 <td style="color: #dc2626; font-weight: bold;">${e.saldo}</td>
@@ -325,6 +161,7 @@ export default function SaldosEnvases() {
             </tr>
           </tbody>
         </table>
+        <p style="font-size: 10px; color: #64748b; margin-top: 16px;">El historial detallado de movimientos se consulta en la página Historial.</p>
       </body>
       </html>
     `;
@@ -357,26 +194,16 @@ export default function SaldosEnvases() {
     if (filtroTipo !== 'Ambos') {
       conDeuda = conDeuda.filter(s => s.tipo === filtroTipo);
     }
-    if (busqueda) {
-      conDeuda = conDeuda.filter(s => 
-        s.nombre.toLowerCase().includes(busqueda.toLowerCase())
-      );
-    }
     return conDeuda;
-  }, [todosLosSaldos, filtroTipo, busqueda]);
+  }, [todosLosSaldos, filtroTipo]);
 
   const saldosPagados = useMemo(() => {
     let pagados = todosLosSaldos.filter(s => s.totalAdeudado === 0);
     if (filtroTipo !== 'Ambos') {
       pagados = pagados.filter(s => s.tipo === filtroTipo);
     }
-    if (busqueda) {
-      pagados = pagados.filter(s => 
-        s.nombre.toLowerCase().includes(busqueda.toLowerCase())
-      );
-    }
     return pagados;
-  }, [todosLosSaldos, filtroTipo, busqueda]);
+  }, [todosLosSaldos, filtroTipo]);
 
   const saldosPorProveedor = saldosFiltrados.filter(s => s.tipo === 'Proveedor');
   const saldosPorCliente = saldosFiltrados.filter(s => s.tipo === 'Cliente');
@@ -385,68 +212,16 @@ export default function SaldosEnvases() {
   const totalProveedores = saldosPorProveedor.reduce((sum, p) => sum + p.totalAdeudado, 0);
   const totalClientes = saldosPorCliente.reduce((sum, c) => sum + c.totalAdeudado, 0);
 
-  // Calcular stock disponible de envases (ingresos desde clientes - salidas a proveedores)
   const stockDisponible = useMemo(() => {
-    const stock = {};
-    
-    // Ingresos/salidas desde movimientos con clientes
-    movimientos.forEach(m => {
-      if (m.cliente_id && m.movimiento_envases) {
-        m.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!stock[e.envase_tipo]) stock[e.envase_tipo] = 0;
-          stock[e.envase_tipo] += (e.cantidad_ingreso || 0) - (e.cantidad_salida || 0);
-        });
-      }
-    });
-    
-    // Ingresos/salidas en salidas de fruta (a clientes)
-    salidas.forEach(s => {
-      if (s.movimiento_envases) {
-        s.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!stock[e.envase_tipo]) stock[e.envase_tipo] = 0;
-          stock[e.envase_tipo] += (e.cantidad_ingreso || 0) - (e.cantidad_salida || 0);
-        });
-      }
-    });
-    
-    // Salidas a proveedores
-    movimientos.forEach(m => {
-      if (m.proveedor_id && m.movimiento_envases) {
-        m.movimiento_envases.forEach(e => {
-          if (!e.envase_tipo) return;
-          if (!stock[e.envase_tipo]) stock[e.envase_tipo] = 0;
-          stock[e.envase_tipo] -= (e.cantidad_salida || 0) - (e.cantidad_ingreso || 0);
-        });
-      }
-    });
-    
-    return Object.entries(stock)
-      .map(([tipo, cantidad]) => ({ tipo, stock: cantidad }))
+    return (Array.isArray(envases) ? envases : [])
+      .map(e => ({ tipo: e.tipo || 'Sin tipo', stock: Math.max(0, Number(e.stock_vacios) || 0) }))
+      .filter(e => e.tipo)
       .sort((a, b) => b.stock - a.stock);
-  }, [movimientos, salidas]);
+  }, [envases]);
 
-  const totalStockDisponible = stockDisponible.reduce((sum, e) => sum + Math.max(0, e.stock), 0);
+  const totalStockDisponible = stockDisponible.reduce((sum, e) => sum + e.stock, 0);
 
-  const isLoading = loadingMov || loadingProv || loadingCli || loadingSal;
-  const hasError = errorMov || errorSal;
-
-  if (hasError) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-red-50 via-white to-orange-50">
-        <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
-          <Card className="border-red-200 bg-red-50 shadow-lg">
-            <CardContent className="p-12 text-center">
-              <AlertTriangle className="h-16 w-16 text-red-600 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-red-900 mb-2">Error al cargar datos</h3>
-              <p className="text-red-700">No se pudieron cargar los movimientos. Intenta recargar la página.</p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  const isLoading = loadingProv || loadingCli || (vistaActual === 'stock' ? loadingEnv : false);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 via-white to-orange-50">
@@ -688,9 +463,7 @@ export default function SaldosEnvases() {
           </Card>
         ) : (
           <div className="space-y-4">
-            {saldosFiltrados.map((entidad) => {
-              const isExpanded = expandedEntity === `${entidad.tipo}_${entidad.id}`;
-              return (
+            {saldosFiltrados.map((entidad) => (
               <Card key={`${entidad.tipo}_${entidad.id}`} className="border-0 shadow-md hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
@@ -725,14 +498,6 @@ export default function SaldosEnvases() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setExpandedEntity(isExpanded ? null : `${entidad.tipo}_${entidad.id}`)}
-                    >
-                      {isExpanded ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
-                      Ver Historial
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
                       onClick={() => generarPDFSaldo(entidad)}
                     >
                       <FileDown className="h-4 w-4 mr-1" />
@@ -748,55 +513,11 @@ export default function SaldosEnvases() {
                       WhatsApp
                     </Button>
                   </div>
-
-                  {isExpanded && (
-                    <div className="mt-4 pt-4 border-t">
-                      <h4 className="font-semibold text-sm mb-3">Historial de Movimientos</h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50">
-                            <tr>
-                              <th className="text-left p-2">Fecha</th>
-                              <th className="text-left p-2">Tipo</th>
-                              <th className="text-left p-2">Envases</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                           {entidad.historial.map((h, idx) => (
-                             <tr key={idx} className="border-b">
-                               <td className="p-2">{format(new Date(h.fecha), 'dd/MM/yy HH:mm', { locale: es })}</td>
-                               <td className="p-2">
-                                 <div className="flex flex-col">
-                                   <span>{h.tipo}</span>
-                                   {h.remito && <span className="text-xs text-slate-500">{h.remito}</span>}
-                                 </div>
-                               </td>
-                               <td className="p-2 text-xs">
-                                 {h.envases?.map((e, i) => (
-                                   <div key={i}>
-                                     {e.envase_tipo}: 
-                                     {e.cantidad_ingreso > 0 && <span className="text-green-600"> +{e.cantidad_ingreso}</span>}
-                                     {e.cantidad_salida > 0 && <span className="text-red-600"> -{e.cantidad_salida}</span>}
-                                   </div>
-                                 ))}
-                                 {h.envases_llenos?.map((e, i) => (
-                                   <div key={i} className="text-purple-600 font-medium">
-                                     {e.envase_tipo}: -{e.cantidad} llenos
-                                   </div>
-                                 ))}
-                               </td>
-                             </tr>
-                           ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
-            )})}
+            ))}
           </div>
-          ))}
+          )}
 
           {/* Lista de Entidades - Saldos PAGADOS (sin deuda) */}
           {vistaActual === 'pagados' && (isLoading ? (
@@ -817,9 +538,7 @@ export default function SaldosEnvases() {
           </Card>
           ) : (
           <div className="space-y-4">
-            {saldosPagados.map((entidad) => {
-              const isExpanded = expandedEntity === `${entidad.tipo}_${entidad.id}`;
-              return (
+            {saldosPagados.map((entidad) => (
               <Card key={`${entidad.tipo}_${entidad.id}`} className="border-0 shadow-md hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
@@ -848,69 +567,17 @@ export default function SaldosEnvases() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setExpandedEntity(isExpanded ? null : `${entidad.tipo}_${entidad.id}`)}
-                    >
-                      {isExpanded ? <ChevronUp className="h-4 w-4 mr-1" /> : <ChevronDown className="h-4 w-4 mr-1" />}
-                      Ver Historial
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
                       onClick={() => generarPDFSaldo(entidad)}
                     >
                       <FileDown className="h-4 w-4 mr-1" />
                       PDF
                     </Button>
                   </div>
-
-                  {isExpanded && (
-                    <div className="mt-4 pt-4 border-t">
-                      <h4 className="font-semibold text-sm mb-3">Historial de Movimientos</h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50">
-                            <tr>
-                              <th className="text-left p-2">Fecha</th>
-                              <th className="text-left p-2">Tipo</th>
-                              <th className="text-left p-2">Envases</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                           {entidad.historial.map((h, idx) => (
-                             <tr key={idx} className="border-b">
-                               <td className="p-2">{format(new Date(h.fecha), 'dd/MM/yy HH:mm', { locale: es })}</td>
-                               <td className="p-2">
-                                 <div className="flex flex-col">
-                                   <span>{h.tipo}</span>
-                                   {h.remito && <span className="text-xs text-slate-500">{h.remito}</span>}
-                                 </div>
-                               </td>
-                               <td className="p-2 text-xs">
-                                 {h.envases?.map((e, i) => (
-                                   <div key={i}>
-                                     {e.envase_tipo}: 
-                                     {e.cantidad_ingreso > 0 && <span className="text-green-600"> +{e.cantidad_ingreso}</span>}
-                                     {e.cantidad_salida > 0 && <span className="text-red-600"> -{e.cantidad_salida}</span>}
-                                   </div>
-                                 ))}
-                                 {h.envases_llenos?.map((e, i) => (
-                                   <div key={i} className="text-purple-600 font-medium">
-                                     {e.envase_tipo}: -{e.cantidad} llenos
-                                   </div>
-                                 ))}
-                               </td>
-                             </tr>
-                           ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
-            )})}
+            ))}
           </div>
-          ))}
+          )}
           </div>
           </div>
           );

@@ -38,7 +38,7 @@ export default function Inventario() {
       return base44.entities.Movimiento.filter(
         { fecha: { $gte: desde, $lte: hasta } },
         '-fecha',
-        500
+        1000
       );
     },
     enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
@@ -54,7 +54,7 @@ export default function Inventario() {
       return base44.entities.SalidaFruta.filter(
         { fecha: { $gte: desde, $lte: hasta } },
         '-fecha',
-        500
+        1000
       );
     },
     enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
@@ -268,12 +268,9 @@ export default function Inventario() {
                   />
                 </div>
               </div>
-              <div>
-                <p className="text-xs text-slate-500 mb-2">Filtro de fechas para historial de movimientos</p>
-                <DateRangeToolbar
-                  onRangeChange={({ desde, hasta }) => setRangoHistorial({ desde, hasta })}
-                />
-              </div>
+              <p className="text-xs text-slate-500">
+                Selecciona un producto para ver el historial de movimientos por período (ej. solo enero 2025).
+              </p>
             </div>
           </CardHeader>
           <CardContent>
@@ -353,9 +350,17 @@ export default function Inventario() {
                             </div>
                           </div>
                         </div>
+                        <div className="mb-3">
+                          <p className="text-xs text-slate-500 mb-2">Ver movimientos en este rango:</p>
+                          <DateRangeToolbar
+                            onRangeChange={({ desde, hasta }) => setRangoHistorial({ desde, hasta })}
+                            defaultRange="thisMonth"
+                            className="flex-wrap"
+                          />
+                        </div>
                         <h4 className="font-semibold text-slate-700 mb-3">Historial de Movimientos</h4>
                         {!rangoHistorial ? (
-                          <p className="text-sm text-slate-500 py-4">Cargando rango de fechas...</p>
+                          <p className="text-sm text-slate-500 py-4">Elige un rango de fechas arriba para cargar el historial (ej. Enero 2025).</p>
                         ) : (
                         <div className="space-y-2 max-h-96 overflow-y-auto">
                           {calcularHistoricoProducto(producto.id).map((mov, idx) => (

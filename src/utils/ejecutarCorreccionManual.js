@@ -3,6 +3,11 @@ import { correccionRetroactivaEnvases } from '@/components/utils/correccionRetro
 import { obtenerPrecioVigente } from '@/utils/precioVigente';
 import { listAll } from '@/utils/listAllPaginado';
 
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
+const BATCH_SIZE_CC = 5;
+const DELAY_BETWEEN_BATCHES_MS = 1000;
+const DELAY_PER_OPERATION_MS = 50;
+
 // Función para ejecutar correcciones manualmente
 export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
   // Resetear flags de localStorage para permitir re-ejecución
@@ -129,81 +134,95 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
       return { corregidos, total: envases.length };
     }
     case 'cuentaCorriente': {
-      const [movimientos, salidas, periodosPrecios] = await Promise.all([
-        listAll(base44.entities.Movimiento, '-created_date'),
-        listAll(base44.entities.SalidaFruta, '-created_date'),
-        listAll(base44.entities.PeriodoPrecio, '-created_date')
-      ]);
+      const movimientos = await listAll(base44.entities.Movimiento, '-created_date');
+      const salidas = await listAll(base44.entities.SalidaFruta, '-created_date');
+      const periodosPrecios = await listAll(base44.entities.PeriodoPrecio, '-created_date');
 
-      // Usar función utilitaria centralizada
-      const obtenerPrecio = (productoId, fecha, tipoPrecio) => 
+      const obtenerPrecio = (productoId, fecha, tipoPrecio) =>
         obtenerPrecioVigente(periodosPrecios, productoId, fecha, tipoPrecio);
 
       let ingresosActualizados = 0;
       let salidasActualizadas = 0;
 
-      // Procesar ingresos
-      for (const movimiento of movimientos) {
-        if (movimiento.tipo_movimiento === 'Ingreso de Fruta' && movimiento.pesajes && movimiento.pesajes.length > 0) {
-          if (movimiento.deuda_total && movimiento.deuda_total > 0) continue;
-
+      // Procesar ingresos (secuencial + throttle + try/catch)
+      const ingresosAProcesar = movimientos.filter(
+        m => m.tipo_movimiento === 'Ingreso de Fruta' && m.pesajes?.length > 0 && !(m.deuda_total && m.deuda_total > 0)
+      );
+      for (let i = 0; i < ingresosAProcesar.length; i++) {
+        const movimiento = ingresosAProcesar[i];
+        try {
           let deudaTotal = 0;
           movimiento.pesajes.forEach(pesaje => {
             const precioCompra = obtenerPrecio(pesaje.producto_id, movimiento.fecha, 'compra');
             deudaTotal += pesaje.peso_neto * precioCompra;
           });
-
           await base44.entities.Movimiento.update(movimiento.id, {
             deuda_total: deudaTotal,
             estado_pago: movimiento.estado_pago || 'Pendiente',
             monto_pagado: movimiento.monto_pagado || 0
           });
           ingresosActualizados++;
+          await delay(DELAY_PER_OPERATION_MS);
+        } catch (err) {
+          console.warn(`CuentaCorriente: error actualizando Movimiento ${movimiento.id}:`, err?.message || err);
         }
+        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
       }
 
-      // Procesar salidas
-      for (const salida of salidas) {
-        if (salida.estado === 'Confirmada' && salida.detalles && salida.detalles.length > 0) {
-          if (salida.deuda_total && salida.deuda_total > 0) continue;
-
+      // Procesar salidas (secuencial + throttle + try/catch)
+      const salidasAProcesar = salidas.filter(
+        s => s.estado === 'Confirmada' && s.detalles?.length > 0 && !(s.deuda_total && s.deuda_total > 0)
+      );
+      for (let i = 0; i < salidasAProcesar.length; i++) {
+        const salida = salidasAProcesar[i];
+        try {
           let deudaTotal = 0;
           salida.detalles.forEach(detalle => {
             const kilosEfectivos = (detalle.kilos_reales || detalle.kilos_salida || 0) - (detalle.descuento_kg || 0);
             const precioVenta = detalle.precio_kg || obtenerPrecio(detalle.producto_id, salida.fecha, 'venta');
             deudaTotal += kilosEfectivos * precioVenta;
           });
-
           await base44.entities.SalidaFruta.update(salida.id, {
             deuda_total: deudaTotal,
             estado_cobro: salida.estado_cobro || 'Pendiente',
             monto_cobrado: salida.monto_cobrado || 0
           });
           salidasActualizadas++;
+          await delay(DELAY_PER_OPERATION_MS);
+        } catch (err) {
+          console.warn(`CuentaCorriente: error actualizando SalidaFruta ${salida.id}:`, err?.message || err);
         }
+        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
       }
 
-      // Crear movimientos de cuenta corriente
+      // Crear movimientos de cuenta corriente (secuencial + throttle + try/catch)
       const movimientosCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
       let movimientosCCCreados = 0;
 
-      for (const movimiento of movimientos.filter(m => m.tipo_movimiento === 'Ingreso de Fruta')) {
-        if (!movimiento.proveedor_id || !movimiento.deuda_total || movimiento.deuda_total <= 0) continue;
+      const ingresosParaCC = movimientos.filter(m => m.tipo_movimiento === 'Ingreso de Fruta' && m.proveedor_id && m.deuda_total > 0);
+      for (let i = 0; i < ingresosParaCC.length; i++) {
+        const movimiento = ingresosParaCC[i];
         const yaExiste = movimientosCC.some(cc => cc.comprobante_tipo === 'IngresoFruta' && cc.comprobante_id === movimiento.id);
         if (!yaExiste) {
-          await base44.entities.CuentaCorriente.create({
-            fecha: movimiento.fecha,
-            tipo_movimiento: 'Haber',
-            entidad_tipo: 'Proveedor',
-            entidad_id: movimiento.proveedor_id,
-            entidad_nombre: movimiento.proveedor_nombre,
-            monto: movimiento.deuda_total,
-            saldo_resultante: 0,
-            concepto: `Ingreso de fruta - ${new Date(movimiento.fecha).toLocaleDateString('es-AR')}`,
-            comprobante_id: movimiento.id,
-            comprobante_tipo: 'IngresoFruta'
-          });
-          movimientosCCCreados++;
+          try {
+            await base44.entities.CuentaCorriente.create({
+              fecha: movimiento.fecha,
+              tipo_movimiento: 'Haber',
+              entidad_tipo: 'Proveedor',
+              entidad_id: movimiento.proveedor_id,
+              entidad_nombre: movimiento.proveedor_nombre,
+              monto: movimiento.deuda_total,
+              saldo_resultante: 0,
+              concepto: `Ingreso de fruta - ${new Date(movimiento.fecha).toLocaleDateString('es-AR')}`,
+              comprobante_id: movimiento.id,
+              comprobante_tipo: 'IngresoFruta'
+            });
+            movimientosCCCreados++;
+            await delay(DELAY_PER_OPERATION_MS);
+          } catch (err) {
+            console.warn(`CuentaCorriente: error creando CC IngresoFruta ${movimiento.id}:`, err?.message || err);
+          }
+          if (movimientosCCCreados > 0 && movimientosCCCreados % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
         }
       }
 
@@ -211,23 +230,29 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
         if (!salida.cliente_id || !salida.deuda_total || salida.deuda_total <= 0) continue;
         const yaExiste = movimientosCC.some(cc => cc.comprobante_tipo === 'SalidaFruta' && cc.comprobante_id === salida.id);
         if (!yaExiste) {
-          await base44.entities.CuentaCorriente.create({
-            fecha: salida.fecha,
-            tipo_movimiento: 'Haber',
-            entidad_tipo: 'Cliente',
-            entidad_id: salida.cliente_id,
-            entidad_nombre: salida.cliente_nombre,
-            monto: salida.deuda_total,
-            saldo_resultante: 0,
-            concepto: `Salida de fruta - ${salida.numero_remito}`,
-            comprobante_id: salida.id,
-            comprobante_tipo: 'SalidaFruta'
-          });
-          movimientosCCCreados++;
+          try {
+            await base44.entities.CuentaCorriente.create({
+              fecha: salida.fecha,
+              tipo_movimiento: 'Haber',
+              entidad_tipo: 'Cliente',
+              entidad_id: salida.cliente_id,
+              entidad_nombre: salida.cliente_nombre,
+              monto: salida.deuda_total,
+              saldo_resultante: 0,
+              concepto: `Salida de fruta - ${salida.numero_remito}`,
+              comprobante_id: salida.id,
+              comprobante_tipo: 'SalidaFruta'
+            });
+            movimientosCCCreados++;
+            await delay(DELAY_PER_OPERATION_MS);
+          } catch (err) {
+            console.warn(`CuentaCorriente: error creando CC SalidaFruta ${salida.id}:`, err?.message || err);
+          }
+          if (movimientosCCCreados > 0 && movimientosCCCreados % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
         }
       }
 
-      // Recalcular saldos
+      // Recalcular saldos: construir lista plana de updates y procesar en lotes con throttle + try/catch
       const todosLosMovCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
       const porEntidad = {};
       todosLosMovCC.forEach(mov => {
@@ -236,14 +261,26 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient) {
         porEntidad[key].push(mov);
       });
 
-      for (const [key, movs] of Object.entries(porEntidad)) {
+      const movimientosAActualizar = [];
+      for (const movs of Object.values(porEntidad)) {
         const movsOrdenados = movs.sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
         let saldoAcumulado = 0;
         for (const mov of movsOrdenados) {
           const monto = Number(mov.monto) || 0;
           saldoAcumulado += mov.tipo_movimiento === 'Haber' ? monto : -monto;
-          await base44.entities.CuentaCorriente.update(mov.id, { saldo_resultante: saldoAcumulado });
+          movimientosAActualizar.push({ id: mov.id, saldo_resultante: saldoAcumulado });
         }
+      }
+
+      for (let i = 0; i < movimientosAActualizar.length; i++) {
+        const { id, saldo_resultante } = movimientosAActualizar[i];
+        try {
+          await base44.entities.CuentaCorriente.update(id, { saldo_resultante });
+          await delay(DELAY_PER_OPERATION_MS);
+        } catch (err) {
+          console.warn(`CuentaCorriente: error actualizando saldo_resultante ${id}:`, err?.message || err);
+        }
+        if ((i + 1) % BATCH_SIZE_CC === 0) await delay(DELAY_BETWEEN_BATCHES_MS);
       }
 
       queryClient.invalidateQueries(['movimientos']);

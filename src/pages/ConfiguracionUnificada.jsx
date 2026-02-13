@@ -20,8 +20,6 @@ import MantenimientoContent from '@/components/configuracion/MantenimientoConten
 import SeguridadContent from '@/components/configuracion/SeguridadContent';
 import CategoriasEmpleadoContent from '@/components/configuracion/CategoriasEmpleadoContent';
 import ImportesConfigContent from '@/components/configuracion/ImportesConfigContent';
-import UsuariosContent from '@/components/configuracion/UsuariosContent';
-
 // Modales
 import ABMModal from '@/components/configuracion/modals/ABMModal';
 import CuentaModal from '@/components/configuracion/modals/CuentaModal';
@@ -31,7 +29,6 @@ import EmpleadoModal from '@/components/configuracion/modals/EmpleadoModal';
 import DeleteConfirmModal from '@/components/configuracion/modals/DeleteConfirmModal';
 import CategoriaEmpleadoModal from '@/components/configuracion/modals/CategoriaEmpleadoModal';
 import ImportModal from '@/components/configuracion/modals/ImportModal';
-import InvitarUsuarioModal from '@/components/configuracion/modals/InvitarUsuarioModal';
 import ImportBancosModal from '@/components/configuracion/modals/ImportBancosModal';
 
 export default function ConfiguracionUnificada() {
@@ -39,7 +36,6 @@ export default function ConfiguracionUnificada() {
   const { askPin, PinGuardModal } = usePinGuard();
   const { verifyPin, pinConfig } = useSecurity();
   const [activeTab, setActiveTab] = useState('abm');
-  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Estados para PIN
@@ -109,9 +105,6 @@ export default function ConfiguracionUnificada() {
 
   // Estados para Empleados
   const [empleadoModal, setEmpleadoModal] = useState({ open: false, item: null });
-  const [invitarUsuarioModal, setInvitarUsuarioModal] = useState(false);
-  const [emailInvitar, setEmailInvitar] = useState('');
-  const [rolInvitar, setRolInvitar] = useState('user');
 
   const [categoriaModal, setCategoriaModal] = useState({ open: false, item: null });
   const [importeModal, setImporteModal] = useState({ open: false, item: null });
@@ -119,19 +112,8 @@ export default function ConfiguracionUnificada() {
   const [ejecutandoCorreccion, setEjecutandoCorreccion] = useState(null);
   const [progresoSincronizacion, setProgresoSincronizacion] = useState('');
 
-  // Cargar usuario actual
   React.useEffect(() => {
-    const checkUser = async () => {
-      try {
-        const user = await base44.auth.me();
-        setCurrentUser(user);
-      } catch (error) {
-        console.error('Error al obtener usuario:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    checkUser();
+    setLoading(false);
   }, []);
 
   // Queries (solo las necesarias fuera del ABM)
@@ -200,11 +182,6 @@ export default function ConfiguracionUnificada() {
   const { data: importesConfig = [] } = useQuery({
     queryKey: ['importesconfig'],
     queryFn: () => base44.entities.ConfiguracionImportes.list()
-  });
-
-  const { data: usuarios = [] } = useQuery({
-    queryKey: ['usuarios'],
-    queryFn: () => base44.entities.User.list('-created_date')
   });
 
   // Mutations para PIN
@@ -533,20 +510,6 @@ export default function ConfiguracionUnificada() {
     }
   });
 
-  const invitarUsuarioMutation = useMutation({
-    mutationFn: async ({ email, role }) => {
-      return await base44.users.inviteUser(email, role);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['usuarios']);
-      setInvitarUsuarioModal(false);
-      setEmailInvitar('');
-      setRolInvitar('user');
-      toast.success('Invitación enviada exitosamente al correo electrónico');
-    },
-    onError: (error) => toast.error(error.message || 'Error al invitar usuario')
-  });
-
   // Handlers para importar Plan de Cuentas
   const handleImportarCSV = async (e) => {
     const file = e.target.files?.[0];
@@ -655,7 +618,6 @@ export default function ConfiguracionUnificada() {
     { key: 'precios', label: 'Precios', icon: DollarSign },
     { key: 'categorias', label: 'Categorías', icon: Users },
     { key: 'importes', label: 'Importes', icon: DollarSign },
-    { key: 'usuarios', label: 'Usuarios', icon: Users },
     { key: 'mantenimiento', label: 'Mantenimiento', icon: Wrench },
     { key: 'seguridad', label: 'PIN', icon: Lock }
   ];
@@ -759,14 +721,6 @@ export default function ConfiguracionUnificada() {
                 importes={importesConfig}
                 onEdit={(item) => setImporteModal({ open: true, item })}
                 onDelete={(id) => eliminarImporteMutation.mutate(id)}
-              />
-            )}
-
-            {activeTab === 'usuarios' && (
-              <UsuariosContent
-                currentUser={currentUser}
-                usuarios={usuarios}
-                onInvitar={() => setInvitarUsuarioModal(true)}
               />
             )}
 
@@ -891,21 +845,6 @@ export default function ConfiguracionUnificada() {
         onClose={() => setImporteModal({ open: false, item: null })}
         onSave={(data) => guardarImporteMutation.mutate(data)}
         isLoading={guardarImporteMutation.isPending}
-      />
-
-      <InvitarUsuarioModal
-        open={invitarUsuarioModal}
-        onClose={() => {
-          setInvitarUsuarioModal(false);
-          setEmailInvitar('');
-          setRolInvitar('user');
-        }}
-        email={emailInvitar}
-        setEmail={setEmailInvitar}
-        rol={rolInvitar}
-        setRol={setRolInvitar}
-        onInvitar={() => invitarUsuarioMutation.mutate({ email: emailInvitar, role: rolInvitar })}
-        isLoading={invitarUsuarioMutation.isPending}
       />
 
       <ImportBancosModal

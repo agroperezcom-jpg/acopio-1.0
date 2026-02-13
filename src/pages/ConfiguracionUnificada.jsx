@@ -737,7 +737,7 @@ export default function ConfiguracionUnificada() {
                       queryClient.invalidateQueries({ queryKey: ['cuentacorriente'] });
                       toast.success(`Sincronización completada: ${result.proveedoresActualizados} proveedores, ${result.clientesActualizados} clientes.`);
                     } else {
-                      const onProgress = (tipo === 'correccionSaldosEnvases' ? (msg) => setProgresoSincronizacion(msg) : undefined);
+                      const onProgress = (tipo === 'correccionSaldosEnvases' || tipo === 'recalcularSaldosDesdeCC' ? (msg) => setProgresoSincronizacion(msg) : undefined);
                       const result = await ejecutarCorreccionManual(tipo, base44, queryClient, onProgress);
                       const mensaje = result?.message ?? 'Proceso finalizado correctamente.';
                       toast.success(mensaje);

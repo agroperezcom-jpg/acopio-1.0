@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Wrench, Loader2, RefreshCw, Package } from "lucide-react";
+import { Wrench, Loader2, RefreshCw, Package, Scale } from "lucide-react";
 
 export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarCorreccion, progresoSincronizacion = '' }) {
   const correcciones = [
@@ -18,6 +18,13 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
       descripcion: 'Recalcula saldo_envases de cada Proveedor y Cliente desde todo el historial (Ingresos, Salidas, Movimientos de Envases). Sincroniza con la nueva estructura de datos.',
       tipo: 'correccionSaldosEnvases',
       icon: Package
+    },
+    {
+      id: 'recalcularSaldosDesdeCC',
+      titulo: 'Reparar saldo_actual desde Cuenta Corriente',
+      descripcion: 'Sincroniza saldo_actual de cada Proveedor y Cliente con la tabla CuentaCorriente: suma Haber, resta Debe (solo montos ya guardados). No recalcula precios.',
+      tipo: 'recalcularSaldosDesdeCC',
+      icon: Scale
     },
     {
       id: 'autoRetroactiva',
@@ -71,7 +78,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
           <CardTitle>Procesos de Corrección</CardTitle>
         </CardHeader>
         <CardContent>
-          {progresoSincronizacion && (ejecutandoCorreccion === 'sincronizarSaldos' || ejecutandoCorreccion === 'correccionSaldosEnvases') && (
+          {progresoSincronizacion && (ejecutandoCorreccion === 'sincronizarSaldos' || ejecutandoCorreccion === 'correccionSaldosEnvases' || ejecutandoCorreccion === 'recalcularSaldosDesdeCC') && (
             <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
               <p className="font-medium">Progreso:</p>
               <p className="mt-1">{progresoSincronizacion}</p>
@@ -82,6 +89,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
               const Icon = correccion.icon || Wrench;
               const esSincronizar = correccion.tipo === 'sincronizarSaldos';
               const esSaldosEnvases = correccion.tipo === 'correccionSaldosEnvases';
+              const esRecalcularCC = correccion.tipo === 'recalcularSaldosDesdeCC';
               return (
                 <div
                   key={correccion.id}
@@ -98,12 +106,12 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
                     {ejecutandoCorreccion === correccion.tipo ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {esSincronizar ? 'Sincronizando...' : esSaldosEnvases ? 'Inicializando saldos...' : 'Ejecutando...'}
+                        {esSincronizar ? 'Sincronizando...' : esSaldosEnvases ? 'Inicializando saldos...' : esRecalcularCC ? 'Reparando saldos...' : 'Ejecutando...'}
                       </>
                     ) : (
                       <>
                         <Icon className="h-4 w-4 mr-2" />
-                        {esSincronizar ? 'Sincronizar Saldos' : esSaldosEnvases ? 'Inicializar saldos de envases' : 'Ejecutar Corrección'}
+                        {esSincronizar ? 'Sincronizar Saldos' : esSaldosEnvases ? 'Inicializar saldos de envases' : esRecalcularCC ? 'Reparar saldo_actual desde CC' : 'Ejecutar Corrección'}
                       </>
                     )}
                   </Button>

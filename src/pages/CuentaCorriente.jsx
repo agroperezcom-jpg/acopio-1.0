@@ -6,11 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Scale, Loader2, TrendingUp, TrendingDown, Search, FileText, DollarSign, Download, FileDown, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { Scale, Loader2, TrendingUp, TrendingDown, Search, FileText, DollarSign, Download, FileDown, ChevronLeft, ChevronRight, ChevronDown, Eye } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
-import { format } from 'date-fns';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { usePreciosCache } from '@/components/hooks/usePreciosCache';
 import { exportarExcel } from '@/components/ExportarExcel';
 import { escapeRegex } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -24,12 +24,17 @@ export default function CuentaCorriente() {
     proveedor_id: 'todos'
   });
   const [entidadSeleccionada, setEntidadSeleccionada] = useState(null);
-  const [movimientoExpandido, setMovimientoExpandido] = useState(null);
+  const [selectedEntity, setSelectedEntity] = useState(null);
   const [mostrarSaldosCero, setMostrarSaldosCero] = useState(false);
   const [paginaActual, setPaginaActual] = useState(1);
   const ITEMS_POR_PAGINA = 25;
 
-  // Paginación de datos del servidor (página actual para Cliente, Proveedor, Cobro, Pago, MT)
+  // Pestañas: Cuentas con Saldos | Saldos en Cero
+  const [activeTab, setActiveTab] = useState('con_saldo');
+  const [pageConSaldo, setPageConSaldo] = useState(1);
+  const [pageSaldoCero, setPageSaldoCero] = useState(1);
+  const [filtroFechaSaldoCero, setFiltroFechaSaldoCero] = useState('mes_actual'); // 'mes_actual' | 'mes_anterior'
+
   const [paginaDatos, setPaginaDatos] = useState(1);
   const ITEMS_POR_PAGINA_API = 20;
 
@@ -42,9 +47,6 @@ export default function CuentaCorriente() {
   useEffect(() => {
     setPaginaDatos(1);
   }, [busquedaServidor]);
-
-  // Hook centralizado para caché de precios
-  const { obtenerPrecioVigente } = usePreciosCache();
 
   const PAGE_SIZE_CC = 20;
 
@@ -88,29 +90,34 @@ export default function CuentaCorriente() {
 
   const movimientosCC = useMemo(() => movimientosCCData?.pages?.flat() ?? [], [movimientosCCData]);
 
-  const skipCobros = (paginaDatos - 1) * ITEMS_POR_PAGINA_API;
-  const { data: cobros = [] } = useQuery({
-    queryKey: ['cobros', paginaDatos],
-    queryFn: () => base44.entities.Cobro.list('-fecha', ITEMS_POR_PAGINA_API, skipCobros),
-    staleTime: 5 * 60 * 1000,
+  // Vista detalle: movimientos de CuentaCorriente filtrados por entidad (solo cuando selectedEntity está definido)
+  const PAGE_SIZE_DETALLE = 20;
+  const {
+    data: detalleCCData,
+    fetchNextPage: fetchMoreDetalleCC,
+    hasNextPage: hasMoreDetalleCC,
+    isFetchingNextPage: loadingMoreDetalleCC,
+    isLoading: isLoadingDetalleCC,
+  } = useInfiniteQuery({
+    queryKey: ['cuentacorriente-detalle', selectedEntity?.entidad_id, selectedEntity?.entidad_tipo],
+    queryFn: ({ pageParam = 0 }) =>
+      base44.entities.CuentaCorriente.filter(
+        {
+          entidad_id: selectedEntity.entidad_id,
+          entidad_tipo: selectedEntity.entidad_tipo,
+        },
+        '-fecha',
+        PAGE_SIZE_DETALLE,
+        pageParam
+      ),
+    getNextPageParam: (lastPage, allPages) =>
+      (lastPage?.length ?? 0) === PAGE_SIZE_DETALLE ? allPages.length * PAGE_SIZE_DETALLE : undefined,
+    initialPageParam: 0,
+    enabled: !!selectedEntity?.entidad_id && !!selectedEntity?.entidad_tipo,
+    staleTime: 2 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
-
-  const skipPagos = (paginaDatos - 1) * ITEMS_POR_PAGINA_API;
-  const { data: pagos = [] } = useQuery({
-    queryKey: ['pagos', paginaDatos],
-    queryFn: () => base44.entities.Pago.list('-fecha', ITEMS_POR_PAGINA_API, skipPagos),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
-
-  const skipMT = (paginaDatos - 1) * ITEMS_POR_PAGINA_API;
-  const { data: movimientosTesoreria = [] } = useQuery({
-    queryKey: ['movimientostesoreria', paginaDatos],
-    queryFn: () => base44.entities.MovimientoTesoreria.list('-fecha', ITEMS_POR_PAGINA_API, skipMT),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
+  const movimientosDetalle = useMemo(() => detalleCCData?.pages?.flat() ?? [], [detalleCCData]);
 
   const queryCliente = useMemo(() => {
     if (!busquedaServidor) return {};
@@ -136,43 +143,80 @@ export default function CuentaCorriente() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: movimientos = [] } = useQuery({
-    queryKey: ['movimientos'],
-    queryFn: () => base44.entities.Movimiento.list('-fecha', 100),
+  // Tab "Cuentas con Saldos": solo entidades con saldo_actual != 0 (filtro en servidor si admite $ne, sino en cliente). Limit 100 por tipo, paginación en cliente.
+  const { data: clientesConSaldoRaw = [] } = useQuery({
+    queryKey: ['clientes-con-saldo'],
+    queryFn: async () => {
+      try {
+        const list = await base44.entities.Cliente.filter(
+          { saldo_actual: { $ne: 0 } },
+          'nombre',
+          100,
+          0
+        );
+        return Array.isArray(list) ? list : [];
+      } catch {
+        const list = await base44.entities.Cliente.list('nombre', 200, 0);
+        const all = Array.isArray(list) ? list : [];
+        return all.filter(c => (Number(c.saldo_actual) || 0) !== 0);
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const { data: proveedoresConSaldoRaw = [] } = useQuery({
+    queryKey: ['proveedores-con-saldo'],
+    queryFn: async () => {
+      try {
+        const list = await base44.entities.Proveedor.filter(
+          { saldo_actual: { $ne: 0 } },
+          'nombre',
+          100,
+          0
+        );
+        return Array.isArray(list) ? list : [];
+      } catch {
+        const list = await base44.entities.Proveedor.list('nombre', 200, 0);
+        const all = Array.isArray(list) ? list : [];
+        return all.filter(p => (Number(p.saldo_actual) || 0) !== 0);
+      }
+    },
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 
-  // Filtrar movimientos de CC válidos (solo los que tienen cobros/pagos con movimientos de tesorería)
-  const movimientosCCValidos = movimientosCC.filter(movCC => {
-    // Si no tiene comprobante asociado, es válido (movimientos manuales o de fruta)
-    if (!movCC.comprobante_id || !movCC.comprobante_tipo) return true;
-    
-    // Si es un Cobro, verificar que el cobro existe y tiene movimientos de tesorería
-    if (movCC.comprobante_tipo === 'Cobro' || movCC.comprobante_tipo === 'Retencion') {
-      const cobro = cobros.find(c => c.id === movCC.comprobante_id);
-      if (!cobro) return false;
-      
-      const tieneMovimientos = movimientosTesoreria.some(m => 
-        m.referencia_origen_id === cobro.id && m.referencia_origen_tipo === 'Cobro'
-      );
-      return tieneMovimientos;
-    }
-    
-    // Si es un Pago, verificar que el pago existe y tiene movimientos de tesorería
-    if (movCC.comprobante_tipo === 'Pago') {
-      const pago = pagos.find(p => p.id === movCC.comprobante_id);
-      if (!pago) return false;
-      
-      const tieneMovimientos = movimientosTesoreria.some(m => 
-        m.referencia_origen_id === pago.id && m.referencia_origen_tipo === 'Pago'
-      );
-      return tieneMovimientos;
-    }
-    
-    // Otros tipos de comprobantes son válidos
-    return true;
+  // Tab "Saldos en Cero": entidades con saldo_actual == 0
+  const { data: clientesSaldoCeroRaw = [] } = useQuery({
+    queryKey: ['clientes-saldo-cero'],
+    queryFn: async () => {
+      try {
+        const list = await base44.entities.Cliente.filter({ saldo_actual: 0 }, 'nombre', 500, 0);
+        return Array.isArray(list) ? list : [];
+      } catch {
+        const list = await base44.entities.Cliente.list('nombre', 500, 0);
+        return (Array.isArray(list) ? list : []).filter(c => Math.abs(Number(c.saldo_actual) || 0) < 0.01);
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
+  const { data: proveedoresSaldoCeroRaw = [] } = useQuery({
+    queryKey: ['proveedores-saldo-cero'],
+    queryFn: async () => {
+      try {
+        const list = await base44.entities.Proveedor.filter({ saldo_actual: 0 }, 'nombre', 500, 0);
+        return Array.isArray(list) ? list : [];
+      } catch {
+        const list = await base44.entities.Proveedor.list('nombre', 500, 0);
+        return (Array.isArray(list) ? list : []).filter(p => Math.abs(Number(p.saldo_actual) || 0) < 0.01);
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Sin queries masivas de Movimiento/Cobro/Pago/MovimientoTesoreria: confiamos en CuentaCorriente y saldo_actual.
+  const movimientosCCValidos = movimientosCC;
 
   // CLIENTES: Cobros realizados (movimientos tipo "Debe") - usando movimientos válidos
   const cobrosPorCliente = {};
@@ -311,6 +355,90 @@ export default function CuentaCorriente() {
   // Si hay búsqueda activa, el input ya filtra en servidor; el placeholder lo indica
   const tieneMasDatos = (clientes.length === ITEMS_POR_PAGINA_API || proveedores.length === ITEMS_POR_PAGINA_API);
 
+  // Filas para Tab "Cuentas con Saldos": Nombre, Teléfono, Saldo
+  const filasConSaldo = useMemo(() => {
+    const listC = (clientesConSaldoRaw || []).map(c => ({
+      entidad_tipo: 'Cliente',
+      entidad_id: c.id,
+      entidad_nombre: c.nombre,
+      telefono: c.telefono || c.whatsapp || '',
+      saldo_actual: Number(c.saldo_actual) || 0,
+      raw: c,
+    }));
+    const listP = (proveedoresConSaldoRaw || []).map(p => ({
+      entidad_tipo: 'Proveedor',
+      entidad_id: p.id,
+      entidad_nombre: p.nombre,
+      telefono: p.telefono || p.whatsapp || '',
+      saldo_actual: Number(p.saldo_actual) || 0,
+      raw: p,
+    }));
+    return [...listC, ...listP].sort((a, b) => b.saldo_actual - a.saldo_actual);
+  }, [clientesConSaldoRaw, proveedoresConSaldoRaw]);
+
+  // Filas para Tab "Saldos en Cero", filtradas por Mes Actual / Mes Anterior (updated_at)
+  const filasSaldoCero = useMemo(() => {
+    const now = new Date();
+    const inicioMesActual = startOfMonth(now);
+    const finMesActual = endOfMonth(now);
+    const inicioMesAnterior = startOfMonth(subMonths(now, 1));
+    const finMesAnterior = endOfMonth(subMonths(now, 1));
+    const [desde, hasta] = filtroFechaSaldoCero === 'mes_actual'
+      ? [inicioMesActual, finMesActual]
+      : [inicioMesAnterior, finMesAnterior];
+    const enRango = (ent) => {
+      const fecha = ent.updated_at || ent.updated_date;
+      if (!fecha) return true;
+      const d = new Date(fecha);
+      return d >= desde && d <= hasta;
+    };
+    const listC = (clientesSaldoCeroRaw || []).filter(enRango).map(c => ({
+      entidad_tipo: 'Cliente',
+      entidad_id: c.id,
+      entidad_nombre: c.nombre,
+      telefono: c.telefono || c.whatsapp || '',
+      saldo_actual: 0,
+      raw: c,
+    }));
+    const listP = (proveedoresSaldoCeroRaw || []).filter(enRango).map(p => ({
+      entidad_tipo: 'Proveedor',
+      entidad_id: p.id,
+      entidad_nombre: p.nombre,
+      telefono: p.telefono || p.whatsapp || '',
+      saldo_actual: 0,
+      raw: p,
+    }));
+    return [...listC, ...listP].sort((a, b) => (a.entidad_nombre || '').localeCompare(b.entidad_nombre || ''));
+  }, [clientesSaldoCeroRaw, proveedoresSaldoCeroRaw, filtroFechaSaldoCero]);
+
+  const pageSizeTab = 20;
+  const filasConSaldoPaginadas = useMemo(() => {
+    const start = (pageConSaldo - 1) * pageSizeTab;
+    return filasConSaldo.slice(start, start + pageSizeTab);
+  }, [filasConSaldo, pageConSaldo]);
+  const filasSaldoCeroPaginadas = useMemo(() => {
+    const start = (pageSaldoCero - 1) * pageSizeTab;
+    return filasSaldoCero.slice(start, start + pageSizeTab);
+  }, [filasSaldoCero, pageSaldoCero]);
+
+  const totalPaginasConSaldo = Math.ceil(filasConSaldo.length / pageSizeTab) || 1;
+  const totalPaginasSaldoCero = Math.ceil(filasSaldoCero.length / pageSizeTab) || 1;
+
+  const verDetalleDesdeTab = (fila) => {
+    const movimientos = movimientosCCValidos.filter(
+      m => m.entidad_tipo === fila.entidad_tipo && m.entidad_id === fila.entidad_id
+    );
+    const entidad = {
+      entidad_tipo: fila.entidad_tipo,
+      entidad_id: fila.entidad_id,
+      entidad_nombre: fila.entidad_nombre,
+      movimientos,
+      deuda_real: fila.saldo_actual,
+    };
+    setSelectedEntity(entidad);
+    setEntidadSeleccionada(entidad);
+  };
+
   // Totales para KPIs (saldo vivo desde entidades; cobros/pagos desde movimientos CC)
   const totalCobrosClientes = Object.values(cobrosPorCliente).reduce((sum, d) => sum + d, 0);
   const totalPagosProveedores = Object.values(pagosPorProveedor).reduce((sum, d) => sum + d, 0);
@@ -333,11 +461,8 @@ export default function CuentaCorriente() {
     }
   };
 
-  const obtenerDetalleIngreso = (movimiento) => {
-    if (!movimiento.comprobante_id || movimiento.comprobante_tipo !== 'IngresoFruta') return null;
-    const movimientoIngreso = movimientos.find(m => m.id === movimiento.comprobante_id);
-    return movimientoIngreso;
-  };
+  // Sin carga de Movimiento: no resolvemos detalle de IngresoFruta aquí (evita 429).
+  const obtenerDetalleIngreso = () => null;
 
   const exportarEstadoCuentaPDF = (entidad, movimientos, filtros) => {
     if (!movimientos || movimientos.length === 0) {
@@ -537,17 +662,7 @@ export default function CuentaCorriente() {
           </thead>
           <tbody>
             ${movimientos.map(mov => {
-              const detalleIngreso = obtenerDetalleIngreso(mov);
-              let montoMostrado = mov.monto;
-              
-              if (detalleIngreso && detalleIngreso.pesajes) {
-                const montoCalculado = detalleIngreso.pesajes.reduce((total, pesaje) => {
-                  const precioCompra = obtenerPrecioVigente(pesaje.producto_id, detalleIngreso.fecha, 'compra');
-                  return total + (pesaje.peso_neto * precioCompra);
-                }, 0);
-                if (montoCalculado > 0) montoMostrado = montoCalculado;
-              }
-              
+              const montoMostrado = mov.monto ?? 0;
               const saldoMostrado = mov.tipo_movimiento === 'Haber' ? montoMostrado : (mov.saldo_resultante || 0);
               const esDeuda = mov.tipo_movimiento === 'Haber';
               
@@ -588,6 +703,119 @@ export default function CuentaCorriente() {
     ventana.document.close();
     ventana.onload = () => ventana.print();
   };
+
+  // Vista de detalle cuando se eligió una entidad desde las pestañas: oculta pestañas y muestra movimientos con useInfiniteQuery
+  if (selectedEntity) {
+    const volverALista = () => {
+      setSelectedEntity(null);
+      setEntidadSeleccionada(null);
+    };
+    return (
+      <div className="min-h-screen bg-white p-6">
+        <div className="max-w-6xl mx-auto">
+          <Button
+            onClick={volverALista}
+            variant="outline"
+            className="mb-6"
+          >
+            ← Volver
+          </Button>
+
+          <div className="mb-6 pb-6 border-b border-slate-200">
+            <h1 className="text-3xl font-bold text-slate-900">{selectedEntity.entidad_nombre}</h1>
+            <p className="text-slate-600 mt-1">
+              {selectedEntity.entidad_tipo === 'Cliente' ? 'Cliente' : 'Proveedor'} • Estado de Cuenta
+            </p>
+            <p className="text-lg font-semibold text-slate-700 mt-2">
+              Saldo: ${(selectedEntity.deuda_real ?? 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+            </p>
+          </div>
+
+          {isLoadingDetalleCC ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+            </div>
+          ) : movimientosDetalle.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center text-slate-500">
+                No hay movimientos para esta entidad.
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-100 border-b border-slate-200">
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Fecha</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Tipo</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Comprobante</th>
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700">Debe</th>
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700">Haber</th>
+                      <th className="px-4 py-3 text-right font-semibold text-slate-700">Saldo Parcial</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {movimientosDetalle.map((mov) => {
+                      const monto = mov.monto ?? 0;
+                      const esDebe = mov.tipo_movimiento === 'Debe';
+                      const saldoParcial = mov.saldo_resultante ?? '';
+                      return (
+                        <tr key={mov.id} className="border-b border-slate-100 hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-700">
+                            {mov.fecha ? format(new Date(mov.fecha), 'dd/MM/yyyy', { locale: es }) : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge variant={esDebe ? 'outline' : 'secondary'} className="text-xs">
+                              {esDebe ? 'Pago' : 'Ingreso'}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {mov.comprobante_tipo ?? '-'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-slate-900">
+                            {esDebe ? `$${Number(monto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-slate-900">
+                            {!esDebe ? `$${Number(monto).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                            {saldoParcial !== '' ? `$${Number(saldoParcial).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {hasMoreDetalleCC && (
+                <div className="mt-4 flex justify-center">
+                  <Button
+                    variant="outline"
+                    onClick={() => fetchMoreDetalleCC()}
+                    disabled={loadingMoreDetalleCC}
+                  >
+                    {loadingMoreDetalleCC ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Cargando...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-4 w-4 mr-2" />
+                        Cargar más movimientos
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (entidadSeleccionada) {
     let movimientosFiltrados = entidadSeleccionada.movimientos;
@@ -684,87 +912,36 @@ export default function CuentaCorriente() {
                   </tr>
                 </thead>
                 <tbody>
-                  {movimientosFiltrados.map((mov, idx) => {
-                    const detalleIngreso = obtenerDetalleIngreso(mov);
-                    const expandido = movimientoExpandido === mov.id;
-                    
-                    let montoMostrado = mov.monto;
-                    
-                    if (detalleIngreso && detalleIngreso.pesajes) {
-                      const montoCalculado = detalleIngreso.pesajes.reduce((total, pesaje) => {
-                        const precioCompra = obtenerPrecioVigente(pesaje.producto_id, detalleIngreso.fecha, 'compra');
-                        return total + (pesaje.peso_neto * precioCompra);
-                      }, 0);
-                      if (montoCalculado > 0) montoMostrado = montoCalculado;
-                    }
-                    
-                    // Para movimientos de deuda (Haber), mostrar el monto del movimiento en lugar del saldo acumulado
+                  {movimientosFiltrados.map((mov) => {
+                    const montoMostrado = mov.monto ?? 0;
                     const saldoMostrado = mov.tipo_movimiento === 'Haber' ? montoMostrado : (mov.saldo_resultante || 0);
-                    
                     return (
-                      <React.Fragment key={mov.id}>
-                        <tr className={`border-b border-slate-100 hover:bg-slate-50 ${expandido ? 'bg-slate-50' : ''}`}>
-                          <td className="px-6 py-4 text-slate-700 font-medium">
-                            {mov.fecha ? format(new Date(mov.fecha), "dd/MM/yyyy", { locale: es }) : '-'}
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              {detalleIngreso && (
-                                <button
-                                  onClick={() => setMovimientoExpandido(expandido ? null : mov.id)}
-                                  className="text-slate-400 hover:text-slate-600"
-                                >
-                                  {expandido ? '▼' : '▶'}
-                                </button>
-                              )}
-                              <div>
-                                <p className="text-slate-900 font-medium">{mov.concepto}</p>
-                                <p className="text-xs text-slate-500 mt-0.5">
-                                  <Badge variant="outline" className="mr-2 text-xs h-5">
-                                    {mov.comprobante_tipo}
-                                  </Badge>
-                                </p>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <Badge variant={mov.tipo_movimiento === 'Debe' ? 'outline' : 'secondary'} className="text-xs">
-                              {mov.tipo_movimiento === 'Debe' ? 'Pago/Cobro' : 'Deuda'}
-                            </Badge>
-                          </td>
-                          <td className="px-6 py-4 text-right font-semibold text-slate-900">
-                            {mov.tipo_movimiento === 'Debe' ? '-' : '+'} ${montoMostrado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="px-6 py-4 text-right font-bold text-slate-900">
-                            ${saldoMostrado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-                        {expandido && detalleIngreso && (
-                          <tr className="bg-slate-50 border-b border-slate-100">
-                            <td colSpan="5" className="px-6 py-4">
-                              <div className="text-sm">
-                                <p className="font-semibold text-slate-700 mb-3">Productos Ingresados</p>
-                                <div className="space-y-2">
-                                  {detalleIngreso.pesajes && detalleIngreso.pesajes.length > 0 ? (
-                                    detalleIngreso.pesajes.map((pesaje, pidx) => {
-                                      const precioCompra = obtenerPrecioVigente(pesaje.producto_id, detalleIngreso.fecha, 'compra');
-                                      const montoProducto = pesaje.peso_neto * precioCompra;
-                                      return (
-                                        <div key={pidx} className="flex justify-between text-slate-700">
-                                          <span>{pesaje.producto_nombre}: {pesaje.peso_neto.toFixed(2)} kg @ ${precioCompra.toFixed(2)}/kg</span>
-                                          <span className="font-semibold">${montoProducto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</span>
-                                        </div>
-                                      );
-                                    })
-                                  ) : (
-                                    <p className="text-slate-500">Sin detalles</p>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
+                      <tr key={mov.id} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="px-6 py-4 text-slate-700 font-medium">
+                          {mov.fecha ? format(new Date(mov.fecha), "dd/MM/yyyy", { locale: es }) : '-'}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div>
+                            <p className="text-slate-900 font-medium">{mov.concepto}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              <Badge variant="outline" className="mr-2 text-xs h-5">
+                                {mov.comprobante_tipo}
+                              </Badge>
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge variant={mov.tipo_movimiento === 'Debe' ? 'outline' : 'secondary'} className="text-xs">
+                            {mov.tipo_movimiento === 'Debe' ? 'Pago/Cobro' : 'Deuda'}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 text-right font-semibold text-slate-900">
+                          {mov.tipo_movimiento === 'Debe' ? '-' : '+'} ${montoMostrado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-6 py-4 text-right font-bold text-slate-900">
+                          ${saldoMostrado.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>

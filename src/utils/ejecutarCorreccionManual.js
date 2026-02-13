@@ -31,6 +31,9 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient, onProg
       case 'correccionSaldosEnvases':
         localStorage.removeItem('correccion_saldos_envases_v1');
         break;
+      case 'recalcularSaldosDesdeCC':
+        localStorage.removeItem('recalcular_saldos_desde_cc_v1');
+        break;
     }
   };
 
@@ -481,6 +484,78 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient, onProg
         totalProveedores,
         totalClientes,
         message: `Saldos de envases: ${actualizados} entidades actualizadas (${totalProveedores} proveedores, ${totalClientes} clientes).`
+      };
+    }
+    case 'recalcularSaldosDesdeCC': {
+      // Reparación masiva: saldo_actual = suma de CuentaCorriente (Haber suma, Debe resta). Solo confía en monto guardado.
+      const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
+
+      report('Descargando Cuenta Corriente...');
+      const todosCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
+      await delay(DELAY_PER_OPERATION_MS);
+
+      const saldoPorEntidad = {};
+      for (const mov of todosCC) {
+        const tipo = mov.entidad_tipo;
+        const id = mov.entidad_id;
+        if (!tipo || !id) continue;
+        const key = `${tipo}-${id}`;
+        if (!saldoPorEntidad[key]) saldoPorEntidad[key] = 0;
+        const monto = Number(mov.monto) || 0;
+        if (mov.tipo_movimiento === 'Haber') {
+          saldoPorEntidad[key] += monto;
+        } else {
+          saldoPorEntidad[key] -= monto;
+        }
+      }
+
+      report('Descargando Proveedores y Clientes...');
+      const [proveedores, clientes] = await Promise.all([
+        listAll(base44.entities.Proveedor, 'nombre'),
+        listAll(base44.entities.Cliente, 'nombre')
+      ]);
+      await delay(DELAY_PER_OPERATION_MS);
+
+      let actualizados = 0;
+      const totalP = proveedores.length;
+      const totalC = clientes.length;
+
+      for (let i = 0; i < proveedores.length; i++) {
+        const p = proveedores[i];
+        const saldo = saldoPorEntidad[`Proveedor-${p.id}`] ?? 0;
+        const valor = Math.round(Number(saldo) * 100) / 100;
+        try {
+          await base44.entities.Proveedor.update(p.id, { saldo_actual: valor });
+          actualizados++;
+        } catch (err) {
+          console.warn(`recalcularSaldosDesdeCC: error Proveedor ${p.id}:`, err?.message || err);
+        }
+        report(`Proveedores: ${i + 1}/${totalP}`);
+        await delay(DELAY_PER_OPERATION_MS);
+      }
+
+      for (let i = 0; i < clientes.length; i++) {
+        const c = clientes[i];
+        const saldo = saldoPorEntidad[`Cliente-${c.id}`] ?? 0;
+        const valor = Math.round(Number(saldo) * 100) / 100;
+        try {
+          await base44.entities.Cliente.update(c.id, { saldo_actual: valor });
+          actualizados++;
+        } catch (err) {
+          console.warn(`recalcularSaldosDesdeCC: error Cliente ${c.id}:`, err?.message || err);
+        }
+        report(`Clientes: ${i + 1}/${totalC}`);
+        await delay(DELAY_PER_OPERATION_MS);
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['proveedores'] });
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
+      queryClient.invalidateQueries({ queryKey: ['cuentacorriente'] });
+      return {
+        actualizados,
+        totalProveedores: totalP,
+        totalClientes: totalC,
+        message: `Saldos desde CC: ${actualizados} entidades actualizadas (${totalP} proveedores, ${totalC} clientes). saldo_actual = suma de CuentaCorriente.`
       };
     }
     default:

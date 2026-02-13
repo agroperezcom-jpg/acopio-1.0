@@ -1,14 +1,13 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Scale, Loader2, TrendingUp, TrendingDown, Search, FileText, DollarSign, Download, FileDown, ChevronLeft, ChevronRight, ChevronDown, Eye } from 'lucide-react';
+import { Scale, Loader2, TrendingUp, TrendingDown, Search, FileText, DollarSign, Download, FileDown, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { exportarExcel } from '@/components/ExportarExcel';
@@ -449,21 +448,6 @@ export default function CuentaCorriente() {
     setEntidadSeleccionada(entidad);
   };
 
-  const comprobanteBadge = (tipo) => {
-    switch (tipo) {
-      case 'IngresoFruta': return 'bg-green-100 text-green-800';
-      case 'SalidaFruta': return 'bg-blue-100 text-blue-800';
-      case 'Pago': return 'bg-orange-100 text-orange-800';
-      case 'Cobro': return 'bg-purple-100 text-purple-800';
-      case 'Cheque': return 'bg-pink-100 text-pink-800';
-      case 'Retencion': return 'bg-amber-100 text-amber-800';
-      default: return 'bg-slate-100 text-slate-800';
-    }
-  };
-
-  // Sin carga de Movimiento: no resolvemos detalle de IngresoFruta aquí (evita 429).
-  const obtenerDetalleIngreso = () => null;
-
   const exportarEstadoCuentaPDF = (entidad, movimientos, filtros) => {
     if (!movimientos || movimientos.length === 0) {
       toast.error('No hay movimientos para exportar en el período seleccionado');
@@ -670,7 +654,7 @@ export default function CuentaCorriente() {
                 <tr>
                   <td>${mov.fecha ? format(new Date(mov.fecha), "dd/MM/yyyy", { locale: es }) : '-'}</td>
                   <td>
-                    <strong>${mov.concepto}</strong><br>
+                    <strong>${mov.concepto ?? '-'}</strong><br>
                     <span class="badge" style="background: #e0e7ff; color: #3730a3; margin-top: 2px; display: inline-block;">${mov.comprobante_tipo || 'N/A'}</span>
                   </td>
                   <td>
@@ -922,7 +906,7 @@ export default function CuentaCorriente() {
                         </td>
                         <td className="px-6 py-4">
                           <div>
-                            <p className="text-slate-900 font-medium">{mov.concepto}</p>
+                            <p className="text-slate-900 font-medium">{mov.concepto ?? '-'}</p>
                             <p className="text-xs text-slate-500 mt-0.5">
                               <Badge variant="outline" className="mr-2 text-xs h-5">
                                 {mov.comprobante_tipo}
@@ -1284,9 +1268,9 @@ export default function CuentaCorriente() {
                 </CardContent>
               </Card>
             )}
-                </div>
-                )}
-                </div>
-                </div>
-                );
-                }
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

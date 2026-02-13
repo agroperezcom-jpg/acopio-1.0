@@ -86,31 +86,45 @@ export function calcularNuevoSaldo(saldoAnterior, monto, tipoMovimiento) {
 }
 
 /**
- * Recalcula y actualiza los saldos resultantes para todos los movimientos de una entidad
- * Útil para correcciones después de cambios en movimientos existentes
+ * Recalcula y actualiza los saldos resultantes para todos los movimientos de una entidad.
+ * Usa filter + paginación (solo trae movimientos de ESA entidad), evita list() masivo.
  * @param {Object} base44 - Instancia de base44 client
  * @param {string} entidadId - ID de la entidad (cliente o proveedor)
  * @param {string} entidadTipo - 'Cliente' o 'Proveedor'
  * @returns {Promise<number>} - Saldo final calculado
  */
 export async function recalcularSaldosEntidad(base44, entidadId, entidadTipo) {
-  const todosMovCC = await base44.entities.CuentaCorriente.list();
-  const movsEntidad = todosMovCC
-    .filter(m => m.entidad_id === entidadId && m.entidad_tipo === entidadTipo)
-    .sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
-  
-  const movimientosConSaldo = calcularSaldosAcumulados(movsEntidad);
-  
-  // Actualizar en base de datos
+  const LOTE = 100;
+  const movsEntidad = [];
+  let skip = 0;
+
+  while (true) {
+    const pagina = await base44.entities.CuentaCorriente.filter(
+      { entidad_id: entidadId, entidad_tipo: entidadTipo },
+      'fecha',
+      LOTE,
+      skip
+    );
+    if (!pagina || pagina.length === 0) break;
+    movsEntidad.push(...pagina);
+    if (pagina.length < LOTE) break;
+    skip += LOTE;
+    if (pagina.length === LOTE) await delay(DELAY_ENTRE_LOTES_MS);
+  }
+
+  const movsOrdenados = movsEntidad.sort(
+    (a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime()
+  );
+  const movimientosConSaldo = calcularSaldosAcumulados(movsOrdenados);
+
   for (const mov of movimientosConSaldo) {
     await base44.entities.CuentaCorriente.update(mov.id, {
       saldo_resultante: mov.saldo_resultante
     });
   }
-  
-  // Retornar el saldo final
-  return movimientosConSaldo.length > 0 
-    ? movimientosConSaldo[movimientosConSaldo.length - 1].saldo_resultante 
+
+  return movimientosConSaldo.length > 0
+    ? movimientosConSaldo[movimientosConSaldo.length - 1].saldo_resultante
     : 0;
 }
 

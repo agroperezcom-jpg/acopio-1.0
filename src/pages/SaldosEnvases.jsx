@@ -13,38 +13,51 @@ import { format } from 'date-fns';
 const PAGE_SIZE = 500;
 
 /**
- * Normaliza entidad.saldo_envases para lectura segura.
- * - Si es string → JSON.parse (si falla, {}).
- * - Si es null o undefined → {}.
- * - Si es objeto plano → se devuelve tal cual.
+ * Normaliza entidad.saldo_envases para lectura segura (parser 'todo terreno').
+ * - null o undefined → {}.
+ * - Objeto plano → copia del objeto.
+ * - String: intenta JSON.parse; si falla, reemplaza comillas simples por dobles y vuelve a parsear.
+ * - Si todo falla → {} y, en desarrollo, console.warn con debugLabel.
+ * @param {*} raw - valor crudo de saldo_envases
+ * @param {string} [debugLabel] - identificador de la entidad para aviso si el parseo falla
  */
-function normalizarSaldoEnvases(raw) {
+function normalizarSaldoEnvases(raw, debugLabel) {
   if (raw == null) return {};
-  if (typeof raw === 'string') {
+  if (typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
+  if (typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    return {};
+  } catch {
     try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      const conDobles = raw.replace(/'/g, '"');
+      const parsed = JSON.parse(conDobles);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      return {};
     } catch {
+      const isDev = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
+      const isDevVite = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
+      if (typeof debugLabel === 'string' && debugLabel && (isDev || isDevVite)) {
+        console.warn('[SaldosEnvases] saldo_envases con formato no válido:', debugLabel, 'raw:', raw?.slice?.(0, 80));
+      }
       return {};
     }
   }
-  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
-  return {};
 }
 
-/** True si tiene al menos una clave (está en el tracking de envases). */
-function tieneTrackingEnvases(saldoEnvases) {
-  const obj = normalizarSaldoEnvases(saldoEnvases);
+/** True si tiene al menos una clave (está en el tracking). Si hay claves, la entidad se muestra. */
+function tieneTrackingEnvases(saldoEnvases, debugLabel) {
+  const obj = normalizarSaldoEnvases(saldoEnvases, debugLabel);
   return Object.keys(obj).length > 0;
 }
 
 /**
- * Convierte saldo_envases a array de { tipo, saldo }.
- * Solo incluye líneas con saldo !== 0 (positivo o negativo). Formato inesperado → [].
+ * Convierte saldo_envases a array de { tipo, saldo } (solo saldo !== 0).
  */
-function saldoEnvasesAArray(saldoEnvases) {
+function saldoEnvasesAArray(saldoEnvases, debugLabel) {
   try {
-    const obj = normalizarSaldoEnvases(saldoEnvases);
+    const obj = normalizarSaldoEnvases(saldoEnvases, debugLabel);
     if (!obj || typeof obj !== 'object') return [];
     return Object.entries(obj)
       .map(([tipo, saldo]) => ({ tipo: String(tipo), saldo: Number(saldo) || 0 }))
@@ -116,9 +129,9 @@ export default function SaldosEnvases() {
 
   const todosLosSaldos = useMemo(() => {
     const lista = [];
-    const safeEnvases = (raw) => {
+    const safeEnvases = (raw, debugLabel) => {
       try {
-        const arr = saldoEnvasesAArray(raw);
+        const arr = saldoEnvasesAArray(raw, debugLabel);
         return Array.isArray(arr) ? arr : [];
       } catch {
         return [];
@@ -128,8 +141,10 @@ export default function SaldosEnvases() {
     (Array.isArray(proveedores) ? proveedores : []).forEach((p) => {
       try {
         if (!p || (p.id == null && p.nombre == null)) return;
-        if (!tieneTrackingEnvases(p.saldo_envases)) return;
-        const envasesArray = safeEnvases(p.saldo_envases);
+        const label = `Proveedor "${p.nombre ?? 'sin nombre'}" (id: ${p.id})`;
+        const obj = normalizarSaldoEnvases(p.saldo_envases, label);
+        if (Object.keys(obj).length === 0) return;
+        const envasesArray = safeEnvases(p.saldo_envases, label);
         const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
         const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
         lista.push({
@@ -150,8 +165,10 @@ export default function SaldosEnvases() {
     (Array.isArray(clientes) ? clientes : []).forEach((c) => {
       try {
         if (!c || (c.id == null && c.nombre == null)) return;
-        if (!tieneTrackingEnvases(c.saldo_envases)) return;
-        const envasesArray = safeEnvases(c.saldo_envases);
+        const label = `Cliente "${c.nombre ?? 'sin nombre'}" (id: ${c.id})`;
+        const obj = normalizarSaldoEnvases(c.saldo_envases, label);
+        if (Object.keys(obj).length === 0) return;
+        const envasesArray = safeEnvases(c.saldo_envases, label);
         const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
         const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
         lista.push({

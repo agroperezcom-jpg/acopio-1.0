@@ -306,10 +306,10 @@ export default function SalidaFruta({ embedded = false }) {
         }
       }
 
-      // Actualizar saldo vivo de envases (envíos llenos al cliente = reducen deuda acopio→cliente)
+      // Actualizar saldo vivo de envases: cliente se lleva envases llenos → su deuda con nosotros AUMENTA
       for (const envLleno of nuevaSalida.envases_llenos || []) {
         if (envLleno.cantidad > 0 && envLleno.envase_tipo && clienteId) {
-          await actualizarDeudaEnvase(base44, 'Cliente', clienteId, envLleno.envase_tipo, -envLleno.cantidad);
+          await actualizarDeudaEnvase(base44, 'Cliente', clienteId, envLleno.envase_tipo, envLleno.cantidad);
         }
       }
 

@@ -1115,6 +1115,7 @@ export default function Historial() {
       />
 
       <PinGuardModal />
+      </div>
     </div>
   );
 }

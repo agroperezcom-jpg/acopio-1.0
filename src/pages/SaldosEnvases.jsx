@@ -517,7 +517,7 @@ export default function SaldosEnvases() {
               </Card>
             ))}
           </div>
-          )}
+          ))}
 
           {/* Lista de Entidades - Saldos PAGADOS (sin deuda) */}
           {vistaActual === 'pagados' && (isLoading ? (
@@ -577,8 +577,8 @@ export default function SaldosEnvases() {
               </Card>
             ))}
           </div>
-          )}
+          ))}
           </div>
-          </div>
-          );
-          }
+        </div>
+    );
+}

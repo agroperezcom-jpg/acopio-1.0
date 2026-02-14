@@ -101,48 +101,41 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
   };
 
   return (
-    <div className={cn('flex flex-wrap items-center gap-3', className)}>
-      <div className="flex items-center gap-2">
-        <select
-          value={preset}
-          onChange={handlePresetChange}
-          className="flex h-9 min-w-[140px] rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value={PRESETS.hoy}>Hoy</option>
-          <option value={PRESETS.ayer}>Ayer</option>
-          <option value={PRESETS.esteMes}>Este Mes</option>
-          <option value={PRESETS.mesPasado}>Mes Pasado</option>
-          <option value={PRESETS.ultimos3Meses}>Últimos 3 Meses</option>
-          <option value={PRESETS.esteAnio}>Este Año</option>
-          <option value={PRESETS.personalizado}>Personalizado</option>
-        </select>
-      </div>
+    <div className={cn('flex flex-wrap items-center gap-4', className)}>
+      <select
+        value={preset}
+        onChange={handlePresetChange}
+        className="h-10 min-w-[140px] rounded-md border border-input bg-white px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-label="Preset de rango"
+      >
+        <option value={PRESETS.hoy}>Hoy</option>
+        <option value={PRESETS.ayer}>Ayer</option>
+        <option value={PRESETS.esteMes}>Este Mes</option>
+        <option value={PRESETS.mesPasado}>Mes Pasado</option>
+        <option value={PRESETS.ultimos3Meses}>Últimos 3 Meses</option>
+        <option value={PRESETS.esteAnio}>Este Año</option>
+        <option value={PRESETS.personalizado}>Personalizado</option>
+      </select>
 
-      <div className="flex items-center gap-2">
-        <div>
-          <label className="sr-only">Desde</label>
-          <Input
-            type="date"
-            value={desde}
-            onChange={handleDesdeChange}
-            max={hasta || undefined}
-            className="h-9 w-[130px] text-sm"
-            aria-label="Fecha desde"
-          />
-        </div>
-        <span className="text-slate-400 text-sm font-medium">—</span>
-        <div>
-          <label className="sr-only">Hasta</label>
-          <Input
-            type="date"
-            value={hasta}
-            onChange={handleHastaChange}
-            min={desde || undefined}
-            className="h-9 w-[130px] text-sm"
-            aria-label="Fecha hasta"
-          />
-        </div>
-      </div>
+      <label className="sr-only">Desde</label>
+      <Input
+        type="date"
+        value={desde}
+        onChange={handleDesdeChange}
+        max={hasta || undefined}
+        className="h-10 w-[140px] shrink-0 text-sm"
+        aria-label="Fecha desde"
+      />
+      <span className="text-slate-400 text-sm font-medium shrink-0" aria-hidden="true">—</span>
+      <label className="sr-only">Hasta</label>
+      <Input
+        type="date"
+        value={hasta}
+        onChange={handleHastaChange}
+        min={desde || undefined}
+        className="h-10 w-[140px] shrink-0 text-sm"
+        aria-label="Fecha hasta"
+      />
     </div>
   );
 }

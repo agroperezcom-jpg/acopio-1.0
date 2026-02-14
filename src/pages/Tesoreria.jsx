@@ -64,50 +64,20 @@ export default function Tesoreria() {
     refetchOnWindowFocus: false
   });
 
-  // Mantener movimientosCC SOLO para cobros/pagos realizados (últimos 50 son suficientes para este indicador)
-  const { data: movimientosCC = [] } = useQuery({
-    queryKey: ['cuentacorriente'],
-    queryFn: () => base44.entities.CuentaCorriente.list('-fecha', 50),
-    staleTime: 10 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  // Para KPIs cobros/pagos realizados (mapa de referencias)
-  const { data: movimientosTesoreria = [] } = useQuery({
-    queryKey: ['movimientostesoreria'],
-    queryFn: () => base44.entities.MovimientoTesoreria.list('-fecha', 50),
-    staleTime: 10 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  // Para lista "Movimientos Recientes" - filtrado por rango de fechas
+  // Movimientos de tesorería del período: KPIs Cobros/Pagos Realizados y lista "Movimientos Recientes"
   const { data: movimientosTesoreriaPeriodo = [] } = useQuery({
-    queryKey: ['movimientostesoreria-periodo', rango?.desde, rango?.hasta],
+    queryKey: ['movimientostesoreria-periodo', rango?.desde?.toISOString?.(), rango?.hasta?.toISOString?.()],
     queryFn: async () => {
       const desde = rango.desde.toISOString();
       const hasta = rango.hasta.toISOString();
       return base44.entities.MovimientoTesoreria.filter(
         { fecha: { $gte: desde, $lte: hasta } },
         '-fecha',
-        50
+        5000
       );
     },
     enabled: !!rango?.desde && !!rango?.hasta,
-    staleTime: 10 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  const { data: cobros = [] } = useQuery({
-    queryKey: ['cobros'],
-    queryFn: () => base44.entities.Cobro.list('-fecha', 50),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  const { data: pagos = [] } = useQuery({
-    queryKey: ['pagos'],
-    queryFn: () => base44.entities.Pago.list('-fecha', 50),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
@@ -171,63 +141,21 @@ export default function Tesoreria() {
     [proveedores]
   );
 
-  // Crear Map para búsquedas rápidas - Memoizado
-  const cobrosMap = useMemo(() => 
-    new Map(cobros.map(c => [c.id, c])), 
-    [cobros]
-  );
-  
-  const pagosMap = useMemo(() => 
-    new Map(pagos.map(p => [p.id, p])), 
-    [pagos]
-  );
-  
-  const movimientosTesoreriaMap = useMemo(() => {
-    const map = new Map();
-    movimientosTesoreria.forEach(m => {
-      const key = `${m.referencia_origen_tipo}_${m.referencia_origen_id}`;
-      if (!map.has(key)) {
-        map.set(key, true);
-      }
-    });
-    return map;
-  }, [movimientosTesoreria]);
-
-  // Filtrar movimientos de CC válidos - Optimizado con Maps - Memoizado
-  const movimientosCCValidos = useMemo(() => {
-    return movimientosCC.filter(movCC => {
-      if (!movCC.comprobante_id || !movCC.comprobante_tipo) return true;
-      
-      if (movCC.comprobante_tipo === 'Cobro' || movCC.comprobante_tipo === 'Retencion') {
-        if (!cobrosMap.has(movCC.comprobante_id)) return false;
-        const key = `Cobro_${movCC.comprobante_id}`;
-        return movimientosTesoreriaMap.has(key);
-      }
-      
-      if (movCC.comprobante_tipo === 'Pago') {
-        if (!pagosMap.has(movCC.comprobante_id)) return false;
-        const key = `Pago_${movCC.comprobante_id}`;
-        return movimientosTesoreriaMap.has(key);
-      }
-      
-      return true;
-    });
-  }, [movimientosCC, cobrosMap, pagosMap, movimientosTesoreriaMap]);
-
-  // CLIENTES: Cobros realizados (usando movimientos válidos) - Memoizado
-  const cobrosRealizados = useMemo(() => 
-    movimientosCCValidos
-      .filter(cc => cc.entidad_tipo === 'Cliente' && cc.tipo_movimiento === 'Debe')
-      .reduce((sum, cc) => sum + (cc.monto || 0), 0),
-    [movimientosCCValidos]
+  // KPIs del período: Cobros y Pagos realizados (solo movimientos en el rango de fechas)
+  const cobrosRealizados = useMemo(
+    () =>
+      (movimientosTesoreriaPeriodo || [])
+        .filter((m) => m.referencia_origen_tipo === 'Cobro')
+        .reduce((sum, m) => sum + (Number(m.monto) || 0), 0),
+    [movimientosTesoreriaPeriodo]
   );
 
-  // PROVEEDORES: Pagos realizados (usando movimientos válidos) - Memoizado
-  const pagosRealizados = useMemo(() => 
-    movimientosCCValidos
-      .filter(cc => cc.entidad_tipo === 'Proveedor' && cc.tipo_movimiento === 'Debe')
-      .reduce((sum, cc) => sum + (cc.monto || 0), 0),
-    [movimientosCCValidos]
+  const pagosRealizados = useMemo(
+    () =>
+      (movimientosTesoreriaPeriodo || [])
+        .filter((m) => m.referencia_origen_tipo === 'Pago')
+        .reduce((sum, m) => sum + (Number(m.monto) || 0), 0),
+    [movimientosTesoreriaPeriodo]
   );
 
   // Movimientos recientes del período seleccionado (últimos 5)
@@ -371,7 +299,7 @@ export default function Tesoreria() {
                   <p className="text-2xl font-bold text-green-600">
                     ${cobrosRealizados.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">Ya cobrado</p>
+                  <p className="text-xs text-slate-500 mt-1">En el período seleccionado</p>
                 </div>
                 <DollarSign className="h-10 w-10 text-green-600 opacity-20" />
               </div>
@@ -401,7 +329,7 @@ export default function Tesoreria() {
                   <p className="text-2xl font-bold text-blue-600">
                     ${pagosRealizados.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
                   </p>
-                  <p className="text-xs text-slate-500 mt-1">Ya pagado</p>
+                  <p className="text-xs text-slate-500 mt-1">En el período seleccionado</p>
                 </div>
                 <DollarSign className="h-10 w-10 text-blue-600 opacity-20" />
               </div>

@@ -52,10 +52,6 @@ export function useCorreccionCuentaCorriente() {
     if (!hayDatos) return;
 
     const corregirCuentaCorriente = async () => {
-      console.log('\n═══════════════════════════════════════════════════════════════════');
-      console.log('🔄 CORRECCIÓN RETROACTIVA - CUENTA CORRIENTE');
-      console.log('═══════════════════════════════════════════════════════════════════\n');
-
       try {
         // Función para obtener precio vigente en una fecha
         const obtenerPrecioVigente = (productoId, fecha, tipoPrecio) => {
@@ -79,92 +75,48 @@ export function useCorreccionCuentaCorriente() {
         let ingresosActualizados = 0;
         let salidasActualizadas = 0;
 
-        // ═══════════════════════════════════════════════════════════════════
         // PROCESAR INGRESOS DE FRUTA (Deudas con proveedores)
-        // ═══════════════════════════════════════════════════════════════════
-        console.log('📥 Procesando Ingresos de Fruta...\n');
-        
         for (const movimiento of movimientos) {
           if (movimiento.tipo_movimiento === 'Ingreso de Fruta' && movimiento.pesajes && movimiento.pesajes.length > 0) {
-            // Verificar si ya tiene deuda_total calculada
-            if (movimiento.deuda_total && movimiento.deuda_total > 0) {
-              console.log(`   ⏭️  ${movimiento.proveedor_nombre}: Ya tiene deuda calculada = $${movimiento.deuda_total.toFixed(2)}\n`);
-              continue;
-            }
+            if (movimiento.deuda_total && movimiento.deuda_total > 0) continue;
 
             let deudaTotal = 0;
-            
             movimiento.pesajes.forEach(pesaje => {
               const precioCompra = obtenerPrecioVigente(pesaje.producto_id, movimiento.fecha, 'compra');
-              const deudaPesaje = pesaje.peso_neto * precioCompra;
-              deudaTotal += deudaPesaje;
-              
-              console.log(`   ${pesaje.producto_nombre}: ${pesaje.peso_neto.toFixed(2)} kg × $${precioCompra.toFixed(2)} = $${deudaPesaje.toFixed(2)}`);
+              deudaTotal += pesaje.peso_neto * precioCompra;
             });
 
-            // Actualizar movimiento con deuda total y estado
             await base44.entities.Movimiento.update(movimiento.id, {
               deuda_total: deudaTotal,
               estado_pago: movimiento.estado_pago || 'Pendiente',
               monto_pagado: movimiento.monto_pagado || 0
             });
-            
-            console.log(`   ✅ ${movimiento.proveedor_nombre}: Deuda Total = $${deudaTotal.toFixed(2)}\n`);
             ingresosActualizados++;
           }
         }
 
-        // ═══════════════════════════════════════════════════════════════════
         // PROCESAR SALIDAS DE FRUTA (Deudas de clientes)
-        // ═══════════════════════════════════════════════════════════════════
-        console.log('\n📤 Procesando Salidas de Fruta...\n');
-        
         for (const salida of salidas) {
           if (salida.estado === 'Confirmada' && salida.detalles && salida.detalles.length > 0) {
-            // Verificar si ya tiene deuda_total calculada
-            if (salida.deuda_total && salida.deuda_total > 0) {
-              console.log(`   ⏭️  ${salida.cliente_nombre} - ${salida.numero_remito}: Ya tiene deuda calculada = $${salida.deuda_total.toFixed(2)}\n`);
-              continue;
-            }
+            if (salida.deuda_total && salida.deuda_total > 0) continue;
 
             let deudaTotal = 0;
-            
             salida.detalles.forEach(detalle => {
               const kilosEfectivos = (detalle.kilos_reales || detalle.kilos_salida || 0) - (detalle.descuento_kg || 0);
               const precioVenta = detalle.precio_kg || obtenerPrecioVigente(detalle.producto_id, salida.fecha, 'venta');
-              const deudaDetalle = kilosEfectivos * precioVenta;
-              deudaTotal += deudaDetalle;
-              
-              console.log(`   ${detalle.producto_nombre}: ${kilosEfectivos.toFixed(2)} kg × $${precioVenta.toFixed(2)} = $${deudaDetalle.toFixed(2)}`);
+              deudaTotal += kilosEfectivos * precioVenta;
             });
 
-            // Actualizar salida con deuda total y estado
-            const updates = {
+            await base44.entities.SalidaFruta.update(salida.id, {
               deuda_total: deudaTotal,
               estado_cobro: salida.estado_cobro || 'Pendiente',
               monto_cobrado: salida.monto_cobrado || 0
-            };
-
-            await base44.entities.SalidaFruta.update(salida.id, updates);
-            
-            console.log(`   ✅ ${salida.cliente_nombre} - ${salida.numero_remito}: Deuda Total = $${deudaTotal.toFixed(2)}\n`);
+            });
             salidasActualizadas++;
           }
         }
 
-        console.log('\n═══════════════════════════════════════════════════════════════════');
-        console.log('✅ CORRECCIÓN COMPLETADA');
-        console.log('═══════════════════════════════════════════════════════════════════');
-        console.log(`   Ingresos actualizados: ${ingresosActualizados}`);
-        console.log(`   Salidas actualizadas: ${salidasActualizadas}`);
-        console.log('═══════════════════════════════════════════════════════════════════\n');
-
-        // ═══════════════════════════════════════════════════════════════════
         // PASO 2: CREAR MOVIMIENTOS EN CUENTA CORRIENTE RETROACTIVAMENTE
-        // ═══════════════════════════════════════════════════════════════════
-        console.log('\n🔄 GENERANDO MOVIMIENTOS DE CUENTA CORRIENTE RETROACTIVOS...\n');
-
-        // Obtener movimientos de CC existentes
         const movimientosCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
         let movimientosCCCreados = 0;
 
@@ -191,7 +143,6 @@ export function useCorreccionCuentaCorriente() {
               comprobante_tipo: 'IngresoFruta'
             });
             movimientosCCCreados++;
-            console.log(`✅ CC Proveedor: ${movimiento.proveedor_nombre} - $${movimiento.deuda_total.toFixed(2)}`);
           }
         }
 
@@ -218,17 +169,10 @@ export function useCorreccionCuentaCorriente() {
               comprobante_tipo: 'SalidaFruta'
             });
             movimientosCCCreados++;
-            console.log(`✅ CC Cliente: ${salida.cliente_nombre} - $${salida.deuda_total.toFixed(2)}`);
           }
         }
 
-        console.log(`\n📊 Movimientos de CC creados: ${movimientosCCCreados}`);
-
-        // ═══════════════════════════════════════════════════════════════════
         // PASO 3: RECALCULAR SALDOS RESULTANTES EN ORDEN CRONOLÓGICO
-        // ═══════════════════════════════════════════════════════════════════
-        console.log('\n🧮 RECALCULANDO SALDOS RESULTANTES...\n');
-
         const todosLosMovCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
         
         // Agrupar por entidad (proveedor o cliente)
@@ -258,11 +202,7 @@ export function useCorreccionCuentaCorriente() {
               saldo_resultante: saldoAcumulado
             });
           }
-          
-          console.log(`✅ ${key}: Saldo final = $${saldoAcumulado.toFixed(2)}`);
         }
-
-        console.log('═══════════════════════════════════════════════════════════════════\n');
 
         // Guardar en localStorage
         localStorage.setItem('correccion_cuenta_corriente_completa_v2', JSON.stringify({

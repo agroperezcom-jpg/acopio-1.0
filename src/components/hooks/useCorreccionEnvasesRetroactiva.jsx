@@ -24,13 +24,11 @@ export function useCorreccionEnvasesRetroactiva() {
       // Verificar si ya se ejecutó
       const yaEjecutado = localStorage.getItem(STORAGE_KEY);
       if (yaEjecutado) {
-        console.log('✅ Corrección retroactiva de envases ya ejecutada anteriormente');
         setEjecutado(true);
         return;
       }
 
       setEjecutando(true);
-      console.log('🔄 Iniciando corrección retroactiva de envases...');
 
       try {
         const resultado = await correccionRetroactivaEnvases(base44);
@@ -49,8 +47,7 @@ export function useCorreccionEnvasesRetroactiva() {
         queryClient.invalidateQueries({ queryKey: ['envases'] });
         queryClient.invalidateQueries({ queryKey: ['movimientos'] });
         queryClient.invalidateQueries({ queryKey: ['salidas'] });
-        
-        console.log('✅ Corrección retroactiva de envases completada exitosamente');
+
         setEjecutado(true);
       } catch (error) {
         console.error('❌ Error en corrección retroactiva de envases:', error);
@@ -73,7 +70,6 @@ export function resetCorreccionEnvasesRetroactiva() {
   localStorage.removeItem('correccion_envases_retroactiva_v2');
   localStorage.removeItem('correccion_envases_retroactiva_v3');
   localStorage.removeItem('correccion_envases_retroactiva_v4');
-  console.log('🔄 Flag de corrección retroactiva de envases reseteado');
 }
 
 /**

@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { ArrowLeftRight, Plus, Loader2, Calendar, DollarSign, TrendingUp, TrendingDown, Trash2, FileDown, FileText, Filter, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,18 +19,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+} from '@/components/ui/alert-dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import SearchableSelect from '@/components/SearchableSelect';
 import ExportarMovimientosModal from '@/components/tesoreria/ExportarMovimientosModal';
 import ExportarMovimientosPDFModal from '@/components/tesoreria/ExportarMovimientosPDFModal';
 import EditarFechaMovimientoModal from '@/components/tesoreria/EditarFechaMovimientoModal';
-import { usePinGuard } from '@/hooks/usePinGuard';
-import { ArrowLeftRight, Plus, Loader2, Calendar, DollarSign, TrendingUp, TrendingDown, Trash2, FileDown, FileText, Filter, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from 'sonner';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { base44 } from '@/api/base44Client';
 import { actualizarSaldoEntidad } from '@/utils/contabilidad';
+import { usePinGuard } from '@/hooks/usePinGuard';
 
 export default function MovimientosTesoreria() {
   const queryClient = useQueryClient();
@@ -196,32 +196,25 @@ export default function MovimientosTesoreria() {
             return;
           }
 
-          console.log('🗑️ INICIANDO ELIMINACIÓN TOTAL DEL COBRO:', cobro.id);
-
           // PASO 1: Buscar TODOS los MovimientoTesoreria vinculados
           const movimientosVinculados = movimientos.filter(m => 
             m.referencia_origen_id === cobro.id && m.referencia_origen_tipo === 'Cobro'
           );
-          console.log('📋 Movimientos vinculados a eliminar:', movimientosVinculados.length);
 
           // PASO 2: Revertir saldos de cajas/bancos (deshacer ingresos)
           for (const mov of movimientosVinculados) {
             if (mov.destino_id && mov.destino_tipo) {
-              console.log(`💰 Revirtiendo saldo en ${mov.destino_tipo}: ${mov.destino_nombre}`);
-              
               if (mov.destino_tipo === 'Caja') {
                 const caja = cajas.find(c => c.id === mov.destino_id);
                 if (caja) {
                   const nuevoSaldo = (caja.saldo || 0) - mov.monto;
                   await base44.entities.Caja.update(mov.destino_id, { saldo: nuevoSaldo });
-                  console.log(`  ✓ Caja ${caja.nombre}: $${caja.saldo} → $${nuevoSaldo}`);
                 }
               } else if (mov.destino_tipo === 'Banco') {
                 const banco = bancos.find(b => b.id === mov.destino_id);
                 if (banco) {
                   const nuevoSaldo = (banco.saldo || 0) - mov.monto;
                   await base44.entities.Banco.update(mov.destino_id, { saldo: nuevoSaldo });
-                  console.log(`  ✓ Banco ${banco.nombre}: $${banco.saldo} → $${nuevoSaldo}`);
                 }
               }
             }
@@ -229,8 +222,6 @@ export default function MovimientosTesoreria() {
 
           // PASO 3: Revertir estados de SalidaFruta (volver deudas)
           if (cobro.salidas_aplicadas && cobro.salidas_aplicadas.length > 0) {
-            console.log('📦 Revirtiendo estados de salidas aplicadas:', cobro.salidas_aplicadas.length);
-            
             for (const aplicado of cobro.salidas_aplicadas) {
               const salida = salidas.find(s => s.id === aplicado.salida_id);
               if (salida) {
@@ -248,13 +239,11 @@ export default function MovimientosTesoreria() {
                   monto_cobrado: nuevoMontoCobrado,
                   estado_cobro: nuevoEstado
                 });
-                console.log(`  ✓ Salida ${salida.numero_remito}: cobrado $${montoOriginal} → $${nuevoMontoCobrado}, estado: ${nuevoEstado}`);
               }
             }
           }
 
           // PASO 4: Revertir saldo_actual y eliminar registros de CuentaCorriente vinculados al cobro
-          console.log('🧾 Eliminando movimientos de Cuenta Corriente del cobro...');
           const todosMovimientosCC = await base44.entities.CuentaCorriente.list();
           const movsCCCobro = todosMovimientosCC.filter(m => 
             m.comprobante_id === cobro.id && m.comprobante_tipo === 'Cobro'
@@ -263,11 +252,9 @@ export default function MovimientosTesoreria() {
           for (const movCC of movsCCCobro) {
             await actualizarSaldoEntidad(base44, 'Cliente', cobro.cliente_id, movCC.monto || 0);
             await base44.entities.CuentaCorriente.delete(movCC.id);
-            console.log(`  ✓ Eliminado movimiento CC: ${movCC.concepto} ($${movCC.monto})`);
           }
 
           // PASO 5: Recalcular TODOS los saldos de cuenta corriente del cliente
-          console.log('🔄 Recalculando saldos de Cuenta Corriente del cliente...');
           const movsCCCliente = todosMovimientosCC
             .filter(m => 
               m.entidad_id === cobro.cliente_id && 
@@ -287,10 +274,8 @@ export default function MovimientosTesoreria() {
               saldo_resultante: saldoAcumulado
             });
           }
-          console.log(`  ✓ Saldo final recalculado del cliente: $${saldoAcumulado}`);
 
           // PASO 6: Eliminar IngresoVario del Estado de Resultados
-          console.log('📊 Eliminando registros del Estado de Resultados...');
           const ingresosRelacionados = ingresosVarios.filter(iv => 
             (iv.notas && iv.notas.includes(`ID: ${cobro.id}`)) ||
             (iv.concepto && iv.concepto.includes(cobro.concepto || ''))
@@ -298,21 +283,16 @@ export default function MovimientosTesoreria() {
           
           for (const ingreso of ingresosRelacionados) {
             await base44.entities.IngresoVario.delete(ingreso.id);
-            console.log(`  ✓ Eliminado IngresoVario: ${ingreso.concepto}`);
           }
 
           // PASO 7: Eliminar TODOS los MovimientoTesoreria vinculados
-          console.log('💸 Eliminando movimientos de tesorería vinculados...');
           for (const mov of movimientosVinculados) {
             await base44.entities.MovimientoTesoreria.delete(mov.id);
-            console.log(`  ✓ Eliminado MovimientoTesoreria: ${mov.concepto}`);
           }
 
           // PASO 8: Eliminar el COBRO definitivamente
-          console.log('🔥 Eliminando el Cobro del sistema...');
           await base44.entities.Cobro.delete(cobro.id);
-          console.log('✅ COBRO ELIMINADO COMPLETAMENTE DEL SISTEMA');
-          
+
           return; // Finalizar sin ejecutar lógica adicional
         } else if (movimiento.referencia_origen_tipo === 'Pago') {
           const pago = pagos.find(p => p.id === movimiento.referencia_origen_id);

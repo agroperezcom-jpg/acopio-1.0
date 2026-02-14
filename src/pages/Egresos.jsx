@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { DollarSign, TrendingDown, Calendar, FileText, Trash2, Edit, Plus, Loader2 } from "lucide-react";
+import { format, startOfMonth, endOfDay } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { DollarSign, TrendingDown, Calendar, FileText, Trash2, Edit, Plus, Loader2 } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,17 +19,19 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+} from '@/components/ui/alert-dialog';
 import SearchableSelect from '@/components/SearchableSelect';
 import AsyncSelect from '@/components/AsyncSelect';
-import { toast } from 'sonner';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import { base44 } from '@/api/base44Client';
 
 export default function Egresos() {
   const queryClient = useQueryClient();
-  const [rango, setRango] = useState(null);
+  const [rango, setRango] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const [activeTab, setActiveTab] = useState('costos');
   const [showForm, setShowForm] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, egreso: null });
@@ -284,8 +288,10 @@ export default function Egresos() {
           </h1>
           <p className="text-sm md:text-base text-slate-600 mt-1">Gestión de costos y gastos</p>
           <div className="mt-4">
-            <DateRangeToolbar
-              onRangeChange={({ desde, hasta }) => setRango({ desde, hasta })}
+            <DateRangeSelector
+              startDate={rango.desde}
+              endDate={rango.hasta}
+              onChange={({ start, end }) => setRango({ desde: start, hasta: end })}
             />
           </div>
         </div>

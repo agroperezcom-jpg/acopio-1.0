@@ -1,29 +1,33 @@
 import React, { useState, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { 
-  Wallet, 
-  Landmark, 
-  PiggyBank, 
-  CreditCard, 
-  TrendingUp, 
-  TrendingDown, 
+import { format, startOfMonth, endOfDay } from 'date-fns';
+import { es } from 'date-fns/locale';
+import {
+  Wallet,
+  Landmark,
+  PiggyBank,
+  CreditCard,
+  TrendingUp,
+  TrendingDown,
   AlertTriangle,
   Loader2,
   ArrowRight,
-  DollarSign
+  DollarSign,
 } from 'lucide-react';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { Link } from 'react-router-dom';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import DateRangeSelector from '@/components/DateRangeSelector';
 import { createPageUrl } from '@/utils';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import { base44 } from '@/api/base44Client';
 
 export default function Tesoreria() {
-  const [rango, setRango] = useState(null);
+  const [rango, setRango] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const { data: cajas = [], isLoading: loadingCajas } = useQuery({
     queryKey: ['cajas'],
     queryFn: () => base44.entities.Caja.list(),
@@ -251,8 +255,10 @@ export default function Tesoreria() {
           </h1>
           <p className="text-slate-500 mt-1">Panel de control financiero</p>
           <div className="mt-4">
-            <DateRangeToolbar
-              onRangeChange={({ desde, hasta }) => setRango({ desde, hasta })}
+            <DateRangeSelector
+              startDate={rango.desde}
+              endDate={rango.hasta}
+              onChange={({ start, end }) => setRango({ desde: start, hasta: end })}
             />
           </div>
         </div>
@@ -549,9 +555,7 @@ export default function Tesoreria() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!rango ? (
-                <p className="text-center text-slate-500 py-4">Cargando rango de fechas...</p>
-              ) : movimientosRecientes.length === 0 ? (
+              {movimientosRecientes.length === 0 ? (
                 <p className="text-center text-slate-500 py-4">No hay movimientos en el período seleccionado</p>
               ) : (
                 <div className="space-y-3">

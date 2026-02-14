@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
 import { HandCoins, Plus, Loader2, Calendar, Building2, DollarSign, FileText, Trash2, Search, ChevronLeft, ChevronRight, FileCheck, Download } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,17 +17,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from 'sonner';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
-import PagoConIngresosModal from '@/components/tesoreria/PagoConIngresosModal';
-import ImputarPagoModal from '@/components/tesoreria/ImputarPagoModal';
-import { generarOrdenDePagoPDF } from '@/components/tesoreria/OrdenDePagoPDF';
+} from '@/components/ui/alert-dialog';
+import { base44 } from '@/api/base44Client';
 import { escapeRegex } from '@/lib/utils';
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
 import { usePinGuard } from '@/hooks/usePinGuard';
+import PagoConIngresosModal from '@/components/tesoreria/PagoConIngresosModal';
+import ImputarPagoModal from '@/components/tesoreria/ImputarPagoModal';
+import { generarOrdenDePagoPDF } from '@/components/tesoreria/OrdenDePagoPDF';
 
 export default function Pagos() {
   const queryClient = useQueryClient();
@@ -152,10 +152,10 @@ export default function Pagos() {
       }
 
       // Eliminar movimientos de cuenta corriente relacionados (revertir saldo_actual antes)
-      const movimientosCC = await base44.entities.CuentaCorriente.list();
-      const movsCCPago = movimientosCC.filter(m => 
-        m.comprobante_id === pago.id && m.comprobante_tipo === 'Pago'
-      );
+      const movsCCPago = await base44.entities.CuentaCorriente.filter({
+        comprobante_tipo: 'Pago',
+        comprobante_id: pago.id
+      });
       for (const movCC of movsCCPago) {
         await actualizarSaldoEntidad(base44, 'Proveedor', pago.proveedor_id, movCC.monto || 0);
         await base44.entities.CuentaCorriente.delete(movCC.id);
@@ -176,14 +176,8 @@ export default function Pagos() {
         });
       }
 
-      // Eliminar Egreso del Estado de Resultados si existe
-      const egresosVarios = await base44.entities.Egreso.list();
-      const egresosRelacionados = egresosVarios.filter(eg => 
-        eg.notas && eg.notas.includes(`ID: ${pago.id}`)
-      );
-      for (const egreso of egresosRelacionados) {
-        await base44.entities.Egreso.delete(egreso.id);
-      }
+      // TODO: Implementar borrado seguro cuando exista un campo de enlace (pago_id). No queremos borrar egresos adivinando.
+      // (Al crear el pago se registra un Egreso para Estado de Resultados; sin pago_id en Egreso no hay forma segura de identificarlo.)
 
       // Eliminar todos los movimientos de tesorería vinculados
       for (const mov of movimientosVinculados) {

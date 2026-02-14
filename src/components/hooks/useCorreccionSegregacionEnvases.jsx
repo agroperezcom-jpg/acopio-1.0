@@ -46,7 +46,6 @@ export function useCorreccionSegregacionEnvases() {
       if (ejecutando || ejecutado) return;
 
       setEjecutando(true);
-      console.log('\n🔧 INICIANDO CORRECCIÓN RETROACTIVA - SEGREGACIÓN DE ENVASES\n');
 
       try {
         // Obtener todos los datos necesarios (paginado para escalar a 10k+ registros)
@@ -71,9 +70,6 @@ export function useCorreccionSegregacionEnvases() {
           ...movimientos.map(m => ({ ...m, tipo_registro: 'movimiento', fecha: new Date(m.fecha) })),
           ...salidas.map(s => ({ ...s, tipo_registro: 'salida', fecha: new Date(s.fecha) }))
         ].sort((a, b) => a.fecha - b.fecha);
-
-        console.log(`📊 Total registros a procesar: ${todosLosRegistros.length}`);
-        console.log(`📦 Total envases: ${envases.length}\n`);
 
         // Procesar cronológicamente
         todosLosRegistros.forEach((registro) => {
@@ -155,16 +151,8 @@ export function useCorreccionSegregacionEnvases() {
               antes: { ocupados: stockOcupadosActual, vacios: stockVaciosActual },
               despues: { ocupados: nuevoOcupados, vacios: nuevoVacios }
             });
-
-            console.log(`✅ ${envase.tipo}:`);
-            console.log(`   Ocupados: ${stockOcupadosActual} → ${nuevoOcupados} (${nuevoOcupados - stockOcupadosActual >= 0 ? '+' : ''}${nuevoOcupados - stockOcupadosActual})`);
-            console.log(`   Vacíos: ${stockVaciosActual} → ${nuevoVacios} (${nuevoVacios - stockVaciosActual >= 0 ? '+' : ''}${nuevoVacios - stockVaciosActual})\n`);
           }
         }
-
-        console.log(`\n✅ CORRECCIÓN COMPLETADA`);
-        console.log(`📦 Envases corregidos: ${corregidos}/${envases.length}`);
-        console.log(`📊 Registros procesados: ${todosLosRegistros.length}\n`);
 
         // Guardar resultados en localStorage
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -200,7 +188,6 @@ export function useCorreccionSegregacionEnvases() {
  */
 export function resetCorreccionSegregacion() {
   localStorage.removeItem('correccion_segregacion_envases_ejecutada_v1');
-  console.log('🔄 Corrección de segregación reseteada');
 }
 
 /**

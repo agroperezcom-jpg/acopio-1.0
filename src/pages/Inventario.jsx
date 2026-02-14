@@ -1,24 +1,28 @@
-import React, { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Package, Search, TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Edit, History } from "lucide-react";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
-import { toFixed2, sumaExacta } from "../components/utils/precisionDecimal";
-import { toast } from "sonner";
+import React, { useState, useMemo } from 'react';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { format, startOfMonth, endOfDay } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { Package, Search, TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Edit, History } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import AjusteManualEnvaseModal from '@/components/inventario/AjusteManualEnvaseModal';
 import HistorialAjustesModal from '@/components/inventario/HistorialAjustesModal';
-import DateRangeToolbar, { getRangeForPreset, DATE_RANGE_PRESETS } from '@/components/DateRangeToolbar';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import { toFixed2, sumaExacta } from '@/components/utils/precisionDecimal';
+import { base44 } from '@/api/base44Client';
 
 const HISTORIAL_PAGE_SIZE = 200;
 
 export default function Inventario() {
   const queryClient = useQueryClient();
-  const [rangoHistorial, setRangoHistorial] = useState(() => getRangeForPreset(DATE_RANGE_PRESETS.thisMonth));
+  const [rangoHistorial, setRangoHistorial] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const [search, setSearch] = useState('');
   const [selectedProducto, setSelectedProducto] = useState(null);
   const [ajusteModal, setAjusteModal] = useState({ open: false, envase: null, tipoAjuste: null, stockActual: 0 });
@@ -345,11 +349,12 @@ export default function Inventario() {
                             </div>
                           </div>
                         </div>
-                        <div className="mb-3">
+                        <div className="mb-4">
                           <p className="text-xs text-slate-500 mb-2">Ver movimientos en este rango:</p>
-                          <DateRangeToolbar
-                            onRangeChange={({ desde, hasta }) => setRangoHistorial({ desde, hasta })}
-                            defaultRange="thisMonth"
+                          <DateRangeSelector
+                            startDate={rangoHistorial.desde}
+                            endDate={rangoHistorial.hasta}
+                            onChange={({ start, end }) => setRangoHistorial({ desde: start, hasta: end })}
                             className="flex-wrap"
                           />
                         </div>

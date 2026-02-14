@@ -28,20 +28,10 @@ export function useCorreccionAutoRetroactiva() {
     // Verificar si ya se ejecutó anteriormente
     const yaEjecutado = localStorage.getItem(STORAGE_KEY);
     
-    if (yaEjecutado === 'true') {
-      console.log('✓ Corrección retroactiva ya ejecutada previamente');
-      return;
-    }
+    if (yaEjecutado === 'true') return;
 
-    // Ejecutar corrección automática en background
     const ejecutarCorreccion = async () => {
       try {
-        console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-        console.log('║  🚀 CORRECCIÓN RETROACTIVA AUTOMÁTICA - INICIANDO...            ║');
-        console.log('║     • Pérdidas de Productos (Báscula/Calidad)                   ║');
-        console.log('║     • Stocks de Envases (Ocupados/Vacíos)                       ║');
-        console.log('╚═══════════════════════════════════════════════════════════════════╝\n');
-
         // Ejecutar AMBAS correcciones en paralelo
         const [resultadoPerdidas, resultadoEnvases] = await Promise.all([
           correccionRetroactivaPerdidas(base44),
@@ -68,22 +58,6 @@ export function useCorreccionAutoRetroactiva() {
         queryClient.invalidateQueries({ queryKey: ['movimientos'] });
         queryClient.invalidateQueries({ queryKey: ['salidas'] });
         queryClient.invalidateQueries({ queryKey: ['envases'] });
-
-        console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-        console.log('║  ✅ CORRECCIÓN RETROACTIVA AUTOMÁTICA COMPLETADA                 ║');
-        console.log('╚═══════════════════════════════════════════════════════════════════╝');
-        console.log(`   📦 PRODUCTOS:`);
-        console.log(`      • Corregidos: ${resultadoPerdidas.corregidos}`);
-        console.log(`      • Pérdidas Definitivas: ${resultadoPerdidas.perdidasTotales?.toFixed(2)} kg`);
-        console.log(`      • Kg Ajustados: ${resultadoPerdidas.kgAjustados?.toFixed(2)} kg`);
-        console.log(`   `);
-        console.log(`   📦 ENVASES:`);
-        console.log(`      • Corregidos: ${resultadoEnvases.corregidos}`);
-        console.log(`      • Unidades Ajustadas: ${resultadoEnvases.unidadesAjustadas}`);
-        console.log(`   `);
-        console.log(`   📅 Fecha: ${new Date().toLocaleString()}`);
-        console.log('════════════════════════════════════════════════════════════════════\n');
-
       } catch (error) {
         console.error('\n❌ ERROR EN CORRECCIÓN RETROACTIVA AUTOMÁTICA:', error);
         // No marcar como ejecutado si falló, para que reintente en próxima carga
@@ -108,7 +82,6 @@ export function resetCorreccionRetroactiva() {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(STORAGE_KEY + '_fecha');
   localStorage.removeItem(STORAGE_KEY + '_resultado');
-  console.log('🔄 Corrección retroactiva reseteada - se ejecutará en próxima carga');
 }
 
 /**

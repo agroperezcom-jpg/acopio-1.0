@@ -1,23 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Loader2, Package, ArrowLeftRight, Trash2, X, Home } from "lucide-react";
+import { Plus, Loader2, Package, ArrowLeftRight, Trash2 } from "lucide-react";
 import { format } from 'date-fns';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import AsyncSelect from '@/components/AsyncSelect';
 import QuickCreateModal from '@/components/QuickCreateModal';
 import EnvaseLineItemSimple from '@/components/EnvaseLineItemSimple';
@@ -28,7 +17,6 @@ import { ajustarStockEnvase } from '@/services/StockService';
 import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function MovimientoEnvases() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   
   const [fecha, setFecha] = useState(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
@@ -51,8 +39,6 @@ export default function MovimientoEnvases() {
     contabilizar_viaje: false
   });
   
-
-  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   const [createModal, setCreateModal] = useState({ open: false, type: null });
   const [successModal, setSuccessModal] = useState({ open: false, data: null });
@@ -199,8 +185,6 @@ export default function MovimientoEnvases() {
       // ═══════════════════════════════════════════════════════════════
       // ACTUALIZAR STOCK ENVASES VACÍOS (Movimiento de Envases solo maneja vacíos)
       // ═══════════════════════════════════════════════════════════════
-      console.log('🔄 MOVIMIENTO DE ENVASES - Actualizando stocks VACÍOS...\n');
-      
       for (const envase of movimiento.movimiento_envases) {
         const envaseData = envasesList.find(e => e.id === envase.envase_id);
         if (envaseData) {
@@ -337,24 +321,6 @@ export default function MovimientoEnvases() {
     })).filter(s => s.saldo > 0);
   }, [entidadData]);
 
-  const hasChanges = () => {
-    return proveedorId || clienteId || fleteroId || envases.length > 0 || 
-           envaseActual.envase_id || envaseActual.cantidad_ingreso > 0 || envaseActual.cantidad_salida > 0;
-  };
-
-  const handleClose = () => {
-    if (hasChanges()) {
-      setShowCloseConfirm(true);
-    } else {
-      navigate('/');
-    }
-  };
-
-  const confirmClose = () => {
-    setShowCloseConfirm(false);
-    navigate('/');
-  };
-
   const resetForm = () => {
     setFecha(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
     setTipoEntidad('Proveedor');
@@ -378,24 +344,14 @@ export default function MovimientoEnvases() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-white to-orange-50">
       <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
-              <ArrowLeftRight className="h-6 w-6 text-amber-600" />
-            </div>
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Movimiento de Envases</h1>
-              <p className="text-slate-500 text-sm">Registrar entrada o salida de envases</p>
-            </div>
+        <div className="flex items-center gap-3 mb-8">
+          <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
+            <ArrowLeftRight className="h-6 w-6 text-amber-600" />
           </div>
-          <Button
-            variant="outline"
-            onClick={handleClose}
-            className="flex items-center gap-2"
-          >
-            <X className="h-4 w-4" />
-            Cerrar
-          </Button>
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Movimiento de Envases</h1>
+            <p className="text-slate-500 text-sm">Registrar entrada o salida de envases</p>
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -646,23 +602,6 @@ export default function MovimientoEnvases() {
         onShareWhatsApp={handleShareWhatsApp}
       />
 
-      <AlertDialog open={showCloseConfirm} onOpenChange={setShowCloseConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>¿Cerrar sin guardar?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Hay cambios sin guardar en el formulario. Si cierra ahora, se perderán todos los datos ingresados.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>No, Continuar Editando</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmClose} className="bg-red-600 hover:bg-red-700">
-              <Home className="h-4 w-4 mr-2" />
-              Sí, Volver al Inicio
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

@@ -1,10 +1,12 @@
-import React, { useState, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
-import { useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { startOfMonth, endOfDay } from 'date-fns';
+import { toast } from 'sonner';
+import { History, Search, ChevronDown, ChevronLeft, Filter, ChevronRight, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,33 +16,37 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { History, Search, Trash2, FileDown, MessageCircle, ChevronDown, ChevronUp, Apple, Package, Filter, ShoppingCart, Edit, ChevronRight, Loader2 } from "lucide-react";
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
-import { toast } from 'sonner';
-import { generateMovimientoPDF, downloadPDF, shareWhatsApp } from '@/components/PDFGenerator';
-import { generateSalidaPDF, downloadSalidaPDF, shareSalidaWhatsApp } from '@/components/SalidaPDFGenerator';
-import { descargarPDFMovimientoEnvases, compartirWhatsAppMovimientoEnvases } from '@/components/MovimientoEnvasesPDFGenerator';
-import EditarMovimientoModal from '@/components/EditarMovimientoModal';
-import { usePinGuard } from '@/hooks/usePinGuard';
+} from '@/components/ui/alert-dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { base44 } from '@/api/base44Client';
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
 import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
-import DateRangeToolbar, { getRangeForPreset, DATE_RANGE_PRESETS } from '@/components/DateRangeToolbar';
+import { usePinGuard } from '@/hooks/usePinGuard';
+import { generateMovimientoPDF, downloadPDF, shareWhatsApp } from '@/components/PDFGenerator';
+import { generateSalidaPDF, downloadSalidaPDF, shareSalidaWhatsApp } from '@/components/SalidaPDFGenerator';
+import { descargarPDFMovimientoEnvases, compartirWhatsAppMovimientoEnvases } from '@/components/MovimientoEnvasesPDFGenerator';
+import EditarMovimientoModal from '@/components/EditarMovimientoModal';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import TarjetaMovimiento from '@/components/TarjetaMovimiento';
 
 export default function Historial() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState('todos');
-  const [rangoFechas, setRangoFechas] = useState(() => getRangeForPreset(DATE_RANGE_PRESETS.thisMonth));
+  const [rangoFechas, setRangoFechas] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const [expandedId, setExpandedId] = useState(null);
-  const [deleteDialog, setDeleteDialog] = useState({ open: false, id: null });
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, id: null, tipo: null, registro: null });
   const [isDeleting, setIsDeleting] = useState(false);
+  const [sugerirEliminarEntidad, setSugerirEliminarEntidad] = useState({ open: false, tipo: null, id: null, nombre: null });
   const [editDialog, setEditDialog] = useState({ open: false, movimiento: null });
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pagina, setPagina] = useState(1);
   const { askPin, PinGuardModal } = usePinGuard();
   
   const PAGE_SIZE = 20;
@@ -58,16 +64,21 @@ export default function Historial() {
   const fechaDesdeStr = fechaDesde?.toISOString?.();
   const fechaHastaStr = fechaHasta?.toISOString?.();
 
+  const skip = (pagina - 1) * PAGE_SIZE;
+
+  // Reset página cuando cambian los filtros
+  useEffect(() => {
+    setPagina(1);
+  }, [fechaDesdeStr, fechaHastaStr, tipoFilter, search]);
+
   const {
-    data: movimientosData,
-    fetchNextPage: fetchMoreMovimientos,
-    hasNextPage: hasMoreMovimientos,
-    isFetchingNextPage: loadingMoreMovimientos,
-    isLoading: loadingMov
-  } = useInfiniteQuery({
-    queryKey: ['movimientos-infinite', tipoFilter, fechaDesdeStr, fechaHastaStr],
-    queryFn: ({ pageParam = 0 }) => {
-      if (tipoFilter === 'Salida de Fruta') return Promise.resolve([]);
+    data: movimientos = [],
+    isLoading: loadingMov,
+    isFetching: fetchingMov
+  } = useQuery({
+    queryKey: ['movimientos', tipoFilter, fechaDesdeStr, fechaHastaStr, pagina],
+    queryFn: async () => {
+      if (tipoFilter === 'Salida de Fruta') return [];
       const filter = {
         ...queryMovimientos,
         fecha: {
@@ -75,25 +86,21 @@ export default function Historial() {
           $lte: fechaHasta.toISOString()
         }
       };
-      return base44.entities.Movimiento.filter(filter, '-created_date', PAGE_SIZE, pageParam);
+      return base44.entities.Movimiento.filter(filter, '-created_date', PAGE_SIZE, skip);
     },
-    getNextPageParam: (lastPage, allPages) =>
-      (lastPage?.length ?? 0) === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
-    initialPageParam: 0,
     enabled: tipoFilter !== 'Salida de Fruta' && !!fechaDesde && !!fechaHasta,
     staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData) => previousData
   });
 
   const {
-    data: salidasData,
-    fetchNextPage: fetchMoreSalidas,
-    hasNextPage: hasMoreSalidas,
-    isFetchingNextPage: loadingMoreSalidas,
-    isLoading: loadingSal
-  } = useInfiniteQuery({
-    queryKey: ['salidas-infinite', tipoFilter, fechaDesdeStr, fechaHastaStr],
-    queryFn: ({ pageParam = 0 }) =>
+    data: salidas = [],
+    isLoading: loadingSal,
+    isFetching: fetchingSal
+  } = useQuery({
+    queryKey: ['salidas', tipoFilter, fechaDesdeStr, fechaHastaStr, pagina],
+    queryFn: () =>
       base44.entities.SalidaFruta.filter(
         {
           fecha: {
@@ -103,26 +110,18 @@ export default function Historial() {
         },
         '-created_date',
         PAGE_SIZE,
-        pageParam
+        skip
       ),
-    getNextPageParam: (lastPage, allPages) =>
-      (lastPage?.length ?? 0) === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
-    initialPageParam: 0,
     enabled: (tipoFilter === 'todos' || tipoFilter === 'Salida de Fruta') && !!fechaDesde && !!fechaHasta,
     staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData) => previousData
   });
 
-  const movimientos = useMemo(
-    () => movimientosData?.pages?.flat() ?? [],
-    [movimientosData]
-  );
-  const salidas = useMemo(
-    () => salidasData?.pages?.flat() ?? [],
-    [salidasData]
-  );
+  const hasMoreMovimientos = movimientos?.length === PAGE_SIZE;
+  const hasMoreSalidas = salidas?.length === PAGE_SIZE;
   const hasMore = hasMoreMovimientos || hasMoreSalidas;
-  const loadingMore = loadingMoreMovimientos || loadingMoreSalidas;
+  const loadingMore = fetchingMov || fetchingSal;
 
   const { data: proveedores = [] } = useQuery({
     queryKey: ['proveedores'],
@@ -348,6 +347,29 @@ export default function Historial() {
         // Invalidar todas las queries del sistema
         invalidarTodoElSistema(queryClient);
 
+        // Verificación: si la entidad quedó sin movimientos, ofrecer eliminar la ficha (dato de prueba)
+        const toArray = (r) => (Array.isArray(r) ? r : r ? [r] : []);
+        if (registro.proveedor_id) {
+          const restProv = await base44.entities.Movimiento.filter({ proveedor_id: registro.proveedor_id }, '-created_date', 1);
+          if (toArray(restProv).length === 0) {
+            toast.success('Movimiento eliminado correctamente.');
+            setSugerirEliminarEntidad({ open: true, tipo: 'Proveedor', id: registro.proveedor_id, nombre: registro.proveedor_nombre || 'Sin nombre' });
+            setDeleteDialog({ open: false, id: null, tipo: null, registro: null });
+            setIsDeleting(false);
+            return;
+          }
+        }
+        if (registro.cliente_id) {
+          const restCli = await base44.entities.Movimiento.filter({ cliente_id: registro.cliente_id }, '-created_date', 1);
+          if (toArray(restCli).length === 0) {
+            toast.success('Movimiento eliminado correctamente.');
+            setSugerirEliminarEntidad({ open: true, tipo: 'Cliente', id: registro.cliente_id, nombre: registro.cliente_nombre || 'Sin nombre' });
+            setDeleteDialog({ open: false, id: null, tipo: null, registro: null });
+            setIsDeleting(false);
+            return;
+          }
+        }
+
       } else if (deleteDialog.tipo === 'salida') {
         // REVERSIÓN DE SALIDA DE FRUTA
         if (registro.detalles?.length > 0) {
@@ -443,6 +465,19 @@ export default function Historial() {
         
         // Invalidar todas las queries del sistema
         invalidarTodoElSistema(queryClient);
+
+        // Verificación: si el cliente quedó sin salidas, ofrecer eliminar su ficha (dato de prueba)
+        if (registro.cliente_id) {
+          const toArray = (r) => (Array.isArray(r) ? r : r ? [r] : []);
+          const restSalidas = await base44.entities.SalidaFruta.filter({ cliente_id: registro.cliente_id }, '-fecha', 1);
+          if (toArray(restSalidas).length === 0) {
+            toast.success('Salida eliminada correctamente.');
+            setSugerirEliminarEntidad({ open: true, tipo: 'Cliente', id: registro.cliente_id, nombre: registro.cliente_nombre || 'Sin nombre' });
+            setDeleteDialog({ open: false, id: null, tipo: null, registro: null });
+            setIsDeleting(false);
+            return;
+          }
+        }
       }
 
       setDeleteDialog({ open: false, id: null, tipo: null, registro: null });
@@ -570,9 +605,13 @@ export default function Historial() {
     }
   };
 
-  const toggleExpand = (id) => {
-    setExpandedId(expandedId === id ? null : id);
-  };
+  const toggleExpand = useCallback((id) => {
+    setExpandedId(prev => prev === id ? null : id);
+  }, []);
+
+  const handleDeleteClick = useCallback((registro) => {
+    setDeleteDialog({ open: true, id: registro.id, tipo: registro.origen, registro });
+  }, []);
 
   const handleEditarMovimiento = (registro) => {
     setEditDialog({ open: true, movimiento: registro });
@@ -698,9 +737,10 @@ export default function Historial() {
                 </Select>
               </div>
             </div>
-            <DateRangeToolbar
-              onRangeChange={({ desde, hasta }) => setRangoFechas({ desde, hasta })}
-              defaultRange={DATE_RANGE_PRESETS.thisMonth}
+            <DateRangeSelector
+              startDate={rangoFechas.desde}
+              endDate={rangoFechas.hasta}
+              onChange={({ start, end }) => setRangoFechas({ desde: start, hasta: end })}
               className="border-t border-slate-100 pt-4"
             />
           </CardContent>
@@ -716,348 +756,45 @@ export default function Historial() {
             </div>
           ) : (
             filteredMovimientos.map((mov) => (
-              <Card key={mov.id} className="border-0 shadow-md hover:shadow-lg transition-shadow">
-                <CardHeader className="p-4 pb-0">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-                        mov.tipo === 'Ingreso de Fruta' 
-                          ? 'bg-green-100' 
-                          : mov.tipo === 'Salida de Fruta'
-                          ? 'bg-purple-100'
-                          : 'bg-amber-100'
-                      }`}>
-                        {mov.tipo === 'Ingreso de Fruta' 
-                          ? <Apple className="h-5 w-5 text-green-600" />
-                          : mov.tipo === 'Salida de Fruta'
-                          ? <ShoppingCart className="h-5 w-5 text-purple-600" />
-                          : <Package className="h-5 w-5 text-amber-600" />
-                        }
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1 md:gap-2 flex-wrap">
-                          <h3 className="font-semibold text-sm md:text-base text-slate-800 truncate">
-                            {mov.entidad_nombre}
-                          </h3>
-                          <Badge variant="outline" className="text-xs shrink-0">
-                            {mov.entidad_tipo}
-                          </Badge>
-                          <Badge variant="outline" className={`text-xs shrink-0 ${
-                            mov.tipo === 'Ingreso de Fruta'
-                              ? 'bg-green-50 text-green-700 border-green-200'
-                              : mov.tipo === 'Salida de Fruta'
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-amber-50 text-amber-700 border-amber-200'
-                          }`}>
-                            <span className="hidden sm:inline">{mov.tipo}</span>
-                            <span className="sm:hidden">{mov.tipo === 'Ingreso de Fruta' ? 'Ing.' : mov.tipo === 'Salida de Fruta' ? 'Sal.' : 'Env.'}</span>
-                          </Badge>
-                          {mov.origen === 'salida' && (
-                            <Badge className={mov.estado === 'Confirmada' ? 'bg-green-600' : 'bg-amber-500'}>
-                              {mov.estado}
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-sm text-slate-500">
-                          {format(new Date(mov.fecha), "dd 'de' MMMM yyyy, HH:mm", { locale: es })}
-                          {mov.fletero_nombre && ` • Fletero: ${mov.fletero_nombre}`}
-                          {mov.numero_remito && ` • Remito: ${mov.numero_remito}`}
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => toggleExpand(mov.id)}
-                      className="shrink-0"
-                    >
-                      {expandedId === mov.id ? (
-                        <ChevronUp className="h-5 w-5" />
-                      ) : (
-                        <ChevronDown className="h-5 w-5" />
-                      )}
-                    </Button>
-                  </div>
-                </CardHeader>
-
-                {/* Resumen compacto */}
-                <CardContent className="p-4 pt-2">
-                  <div className="flex flex-wrap gap-2 text-sm">
-                    {mov.origen === 'movimiento' && mov.pesajes?.length > 0 && (
-                      <span className="text-slate-600">
-                        {mov.pesajes.length} pesaje(s) • 
-                        <span className="font-medium text-green-700 ml-1">
-                          {mov.pesajes.reduce((s, p) => s + (p.peso_neto || 0), 0).toFixed(2)} kg netos
-                        </span>
-                      </span>
-                    )}
-                    {mov.origen === 'salida' && mov.detalles?.length > 0 && (
-                      <span className="text-slate-600">
-                        {mov.detalles.length} producto(s) • 
-                        <span className="font-medium text-purple-700 ml-1">
-                          {mov.detalles.reduce((s, d) => s + ((d.kilos_reales || d.kilos_salida) - (d.descuento_kg || 0)), 0).toFixed(2)} kg efectivos
-                        </span>
-                      </span>
-                    )}
-                    {mov.envases_llenos?.length > 0 && (
-                      <span className="text-slate-600">
-                        {mov.envases_llenos.reduce((sum, e) => sum + (e.cantidad || 0), 0)} envases llenos
-                      </span>
-                    )}
-                    {mov.movimiento_envases?.filter(e => e.cantidad_ingreso > 0 || e.cantidad_salida > 0).length > 0 && (
-                      <span className="text-slate-600">
-                        {mov.movimiento_envases.filter(e => e.cantidad_ingreso > 0 || e.cantidad_salida > 0).length} tipo(s) envase vacío
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-
-                {/* Detalle expandido */}
-                {expandedId === mov.id && (
-                  <CardContent className="pt-0 pb-4 px-4 border-t border-slate-100">
-                    <div className="space-y-4 mt-4">
-                      {/* Información adicional de salida */}
-                      {mov.origen === 'salida' && (
-                        <div className="p-3 bg-slate-50 rounded-lg space-y-2">
-                          {mov.comprobante_cliente && (
-                            <p className="text-sm"><span className="font-medium">Comprobante Cliente:</span> {mov.comprobante_cliente}</p>
-                          )}
-                          {mov.deuda_total > 0 && (
-                            <p className="text-sm"><span className="font-medium">Deuda Total:</span> <span className="text-green-700 font-bold">${mov.deuda_total.toFixed(2)}</span></p>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Detalles de salida */}
-                      {mov.origen === 'salida' && mov.detalles?.length > 0 && (
-                       <div>
-                         <h4 className="font-medium text-slate-700 mb-2 text-sm md:text-base">Productos</h4>
-                         <div className="overflow-x-auto -mx-4 md:mx-0">
-                           <div className="inline-block min-w-full align-middle px-4 md:px-0">
-                             <table className="w-full text-xs md:text-sm">
-                               <thead className="bg-slate-50">
-                                 <tr>
-                                   <th className="text-left p-2 whitespace-nowrap">Producto</th>
-                                   <th className="text-right p-2 whitespace-nowrap">Orig.</th>
-                                   {mov.estado === 'Confirmada' && (
-                                     <>
-                                       <th className="text-right p-2 whitespace-nowrap">Reales</th>
-                                       <th className="text-right p-2 whitespace-nowrap">Desc.</th>
-                                     </>
-                                   )}
-                                   <th className="text-right p-2 whitespace-nowrap">Efect.</th>
-                                 </tr>
-                               </thead>
-                               <tbody>
-                                 {mov.detalles.map((d, i) => {
-                                   const kilosReales = d.kilos_reales || d.kilos_salida;
-                                   const descuento = d.descuento_kg || 0;
-                                   const efectivos = kilosReales - descuento;
-                                   return (
-                                     <tr key={i} className="border-b border-slate-100">
-                                       <td className="p-2">{d.producto_nombre}</td>
-                                       <td className="p-2 text-right">{d.kilos_salida.toFixed(2)}</td>
-                                       {mov.estado === 'Confirmada' && (
-                                         <>
-                                           <td className="p-2 text-right">{kilosReales.toFixed(2)}</td>
-                                           <td className="p-2 text-right text-red-600">{descuento > 0 ? `-${descuento.toFixed(2)}` : '-'}</td>
-                                         </>
-                                       )}
-                                       <td className="p-2 text-right font-medium text-purple-700">{efectivos.toFixed(2)}</td>
-                                     </tr>
-                                   );
-                                 })}
-                               </tbody>
-                             </table>
-                           </div>
-                         </div>
-                       </div>
-                      )}
-
-                      {/* Pesajes */}
-                      {mov.origen === 'movimiento' && mov.pesajes?.length > 0 && (
-                       <div>
-                         <h4 className="font-medium text-slate-700 mb-2 text-sm md:text-base">Pesajes</h4>
-                         <div className="overflow-x-auto -mx-4 md:mx-0">
-                           <div className="inline-block min-w-full align-middle px-4 md:px-0">
-                             <table className="w-full text-xs md:text-sm">
-                               <thead className="bg-slate-50">
-                                 <tr>
-                                   <th className="text-left p-2 whitespace-nowrap">Producto</th>
-                                   <th className="text-left p-2 whitespace-nowrap">Envase</th>
-                                   <th className="text-right p-2 whitespace-nowrap">Cant.</th>
-                                   <th className="text-right p-2 whitespace-nowrap">Bruto</th>
-                                   <th className="text-right p-2 whitespace-nowrap">Tara</th>
-                                   <th className="text-right p-2 whitespace-nowrap">Neto</th>
-                                 </tr>
-                               </thead>
-                               <tbody>
-                                 {mov.pesajes.map((p, i) => (
-                                   <tr key={i} className="border-b border-slate-100">
-                                     <td className="p-2">{p.producto_nombre || '-'}</td>
-                                     <td className="p-2">{p.envase_tipo || '-'}</td>
-                                     <td className="p-2 text-right">{p.cantidad || 1}</td>
-                                     <td className="p-2 text-right">{(p.peso_bruto || 0).toFixed(2)}</td>
-                                     <td className="p-2 text-right">
-                                       {p.modo === 'libre' 
-                                         ? (p.tara_manual || 0).toFixed(2)
-                                         : ((p.tara_unitaria || 0) * (p.cantidad || 1)).toFixed(2)
-                                       }
-                                     </td>
-                                     <td className="p-2 text-right font-medium text-green-700">
-                                       {(p.peso_neto || 0).toFixed(2)}
-                                     </td>
-                                   </tr>
-                                 ))}
-                               </tbody>
-                             </table>
-                           </div>
-                         </div>
-                       </div>
-                      )}
-
-                      {/* Envases Llenos (solo en Ingreso de Fruta) */}
-                      {mov.origen === 'movimiento' && mov.tipo === 'Ingreso de Fruta' && mov.envases_llenos?.length > 0 && (
-                        <div>
-                          <h4 className="font-medium text-slate-700 mb-2 text-sm md:text-base">Envases Llenos con Fruta</h4>
-                          <div className="p-3 bg-green-50 rounded-lg border-l-4 border-green-500">
-                            <div className="space-y-1">
-                              {mov.envases_llenos.map((e, i) => (
-                                <div key={i} className="flex justify-between items-center">
-                                  <span className="text-sm font-medium text-slate-700">{e.envase_tipo}</span>
-                                  <span className="text-sm font-bold text-green-700">{e.cantidad} unidades</span>
-                                </div>
-                              ))}
-                            </div>
-                            <p className="text-xs text-slate-600 mt-2">Envases que ingresaron ocupados con fruta del proveedor</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Envases Llenos (solo en Salida de Fruta) */}
-                      {mov.origen === 'salida' && mov.envases_llenos?.length > 0 && (
-                        <div>
-                          <h4 className="font-medium text-slate-700 mb-2">Envases Llenos con Fruta</h4>
-                          <div className="p-3 bg-amber-50 rounded-lg border-l-4 border-amber-500">
-                            <div className="space-y-1">
-                              {mov.envases_llenos.map((e, i) => (
-                                <div key={i} className="flex justify-between items-center">
-                                  <span className="text-sm font-medium text-slate-700">{e.envase_tipo}</span>
-                                  <span className="text-sm font-bold text-amber-700">{e.cantidad} unidades</span>
-                                </div>
-                              ))}
-                            </div>
-                            <p className="text-xs text-slate-600 mt-2">Envases que salieron ocupados con fruta</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Envases Vacíos */}
-                      {mov.movimiento_envases?.filter(e => e.cantidad_ingreso > 0 || e.cantidad_salida > 0).length > 0 && (
-                       <div>
-                         <h4 className="font-medium text-slate-700 mb-2 text-sm md:text-base">Movimiento de Envases Vacíos</h4>
-                         <div className="overflow-x-auto -mx-4 md:mx-0">
-                           <div className="inline-block min-w-full align-middle px-4 md:px-0">
-                             <table className="w-full text-xs md:text-sm">
-                               <thead className="bg-slate-50">
-                                 <tr>
-                                   <th className="text-left p-2 whitespace-nowrap">Tipo</th>
-                                   <th className="text-center p-2 whitespace-nowrap">Ingreso</th>
-                                   <th className="text-center p-2 whitespace-nowrap">Salida</th>
-                                 </tr>
-                               </thead>
-                               <tbody>
-                                 {mov.movimiento_envases
-                                   .filter(e => e.cantidad_ingreso > 0 || e.cantidad_salida > 0)
-                                   .map((e, i) => (
-                                     <tr key={i} className="border-b border-slate-100">
-                                       <td className="p-2">{e.envase_tipo}</td>
-                                       <td className="p-2 text-center text-green-600 font-medium">
-                                         {e.cantidad_ingreso > 0 ? `+${e.cantidad_ingreso}` : '-'}
-                                       </td>
-                                       <td className="p-2 text-center text-red-600 font-medium">
-                                         {e.cantidad_salida > 0 ? `-${e.cantidad_salida}` : '-'}
-                                       </td>
-                                     </tr>
-                                   ))}
-                               </tbody>
-                             </table>
-                           </div>
-                         </div>
-                       </div>
-                      )}
-
-                      {/* Acciones */}
-                      <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2 pt-4 border-t border-slate-100">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDownloadPDF(mov)}
-                          className="text-xs md:text-sm w-full md:w-auto"
-                        >
-                          <FileDown className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
-                          <span className="hidden sm:inline">Descargar PDF</span>
-                          <span className="sm:hidden">PDF</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleShareWhatsApp(mov)}
-                          className="text-green-600 hover:text-green-700 text-xs md:text-sm w-full md:w-auto"
-                        >
-                          <MessageCircle className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
-                          <span className="hidden sm:inline">WhatsApp</span>
-                          <span className="sm:hidden">Enviar</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEditarMovimiento(mov)}
-                          className="text-blue-600 hover:text-blue-700 text-xs md:text-sm w-full md:w-auto"
-                        >
-                          <Edit className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
-                          Editar
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setDeleteDialog({ open: true, id: mov.id, tipo: mov.origen, registro: mov })}
-                          className="text-red-600 hover:text-red-700 text-xs md:text-sm w-full md:w-auto"
-                        >
-                          <Trash2 className="h-3 w-3 md:h-4 md:w-4 mr-1 md:mr-2" />
-                          Eliminar
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                )}
-              </Card>
+              <TarjetaMovimiento
+                key={mov.id}
+                mov={mov}
+                isExpanded={expandedId === mov.id}
+                onToggleExpand={toggleExpand}
+                onDownloadPDF={handleDownloadPDF}
+                onShareWhatsApp={handleShareWhatsApp}
+                onEditarMovimiento={handleEditarMovimiento}
+                onDelete={handleDeleteClick}
+              />
             ))
           )}
 
-          {/* Cargar más (feed continuo) */}
-          {!isLoading && filteredMovimientos.length > 0 && hasMore && (
-            <div className="mt-4 flex justify-center">
+          {/* Barra de Paginación */}
+          {!isLoading && filteredMovimientos.length > 0 && (
+            <div className="mt-6 flex items-center justify-center gap-4 py-4 px-4 rounded-lg bg-slate-50 border border-slate-100">
               <Button
-                variant="ghost"
-                disabled={loadingMore}
-                onClick={() => {
-                  if (hasMoreMovimientos) fetchMoreMovimientos();
-                  if (hasMoreSalidas) fetchMoreSalidas();
-                }}
-                className="w-full max-w-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                variant="outline"
+                size="sm"
+                disabled={pagina <= 1 || loadingMore}
+                onClick={() => setPagina(p => Math.max(1, p - 1))}
+                className="gap-1.5 min-w-[100px]"
               >
-                {loadingMore ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Cargando...
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-4 w-4 mr-2" />
-                    Cargar movimientos anteriores
-                  </>
-                )}
+                <ChevronLeft className="h-4 w-4" />
+                Anterior
+              </Button>
+              <span className="text-sm font-medium text-slate-700 min-w-[80px] text-center">
+                Página {pagina}
+                {loadingMore && <Loader2 className="h-4 w-4 inline ml-1.5 animate-spin align-middle" />}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasMore || loadingMore}
+                onClick={() => setPagina(p => p + 1)}
+                className="gap-1.5 min-w-[100px]"
+              >
+                Siguiente
+                <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
           )}
@@ -1101,6 +838,42 @@ export default function Historial() {
               className="bg-red-600 hover:bg-red-700"
             >
               {isDeleting ? 'Eliminando y actualizando...' : 'Sí, Eliminar y Actualizar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={sugerirEliminarEntidad.open} onOpenChange={(open) => !open && setSugerirEliminarEntidad({ open: false, tipo: null, id: null, nombre: null })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar la ficha?</AlertDialogTitle>
+            <AlertDialogDescription>
+              El {sugerirEliminarEntidad.tipo === 'Proveedor' ? 'Proveedor' : 'Cliente'} <strong>{sugerirEliminarEntidad.nombre}</strong> no tiene más movimientos.
+              ¿Desea eliminar su ficha?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>No, mantener la ficha</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={async () => {
+                if (!sugerirEliminarEntidad.id || !sugerirEliminarEntidad.tipo) return;
+                try {
+                  if (sugerirEliminarEntidad.tipo === 'Proveedor') {
+                    await base44.entities.Proveedor.delete(sugerirEliminarEntidad.id);
+                  } else {
+                    await base44.entities.Cliente.delete(sugerirEliminarEntidad.id);
+                  }
+                  invalidarTodoElSistema(queryClient);
+                  toast.success(`${sugerirEliminarEntidad.tipo} "${sugerirEliminarEntidad.nombre}" eliminado.`);
+                } catch (err) {
+                  console.error('Error al eliminar entidad:', err);
+                  toast.error('No se pudo eliminar la entidad.');
+                }
+                setSugerirEliminarEntidad({ open: false, tipo: null, id: null, nombre: null });
+              }}
+            >
+              Sí, eliminar ficha
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

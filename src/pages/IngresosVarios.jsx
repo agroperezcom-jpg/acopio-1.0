@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { format, startOfMonth, endOfDay } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
 import { TrendingUp, Plus, Loader2, Calendar, DollarSign, FileText, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,17 +19,19 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from 'sonner';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+} from '@/components/ui/alert-dialog';
 import SearchableSelect from '@/components/SearchableSelect';
 import AsyncSelect from '@/components/AsyncSelect';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import { base44 } from '@/api/base44Client';
 
 export default function IngresosVarios() {
   const queryClient = useQueryClient();
-  const [rango, setRango] = useState(null);
+  const [rango, setRango] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const [modalOpen, setModalOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, ingreso: null });
   const [formData, setFormData] = useState({
@@ -283,8 +287,10 @@ export default function IngresosVarios() {
             Nuevo Ingreso
           </Button>
           </div>
-          <DateRangeToolbar
-            onRangeChange={({ desde, hasta }) => setRango({ desde, hasta })}
+          <DateRangeSelector
+            startDate={rango.desde}
+            endDate={rango.hasta}
+            onChange={({ start, end }) => setRango({ desde: start, hasta: end })}
           />
         </div>
 

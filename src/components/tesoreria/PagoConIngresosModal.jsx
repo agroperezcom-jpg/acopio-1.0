@@ -13,7 +13,6 @@ import MediosPagoMixtosGrid from '@/components/tesoreria/MediosPagoMixtosGrid';
 import MultiplesChequesGrid from '@/components/tesoreria/MultiplesChequesGrid';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
-import { usePreciosCache } from '@/components/hooks/usePreciosCache';
 
 export default function PagoConIngresosModal({ open, onClose, onSave, isLoading, proveedores, bancos, cajas, movimientos, cheques }) {
   const { data: bancosSistema = [] } = useQuery({

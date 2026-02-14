@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
 import { Receipt, Plus, Loader2, Calendar, Users, DollarSign, FileText, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,11 +17,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from 'sonner';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
+} from '@/components/ui/alert-dialog';
 import CobroConSalidasModal from '@/components/tesoreria/CobroConSalidasModal';
+import { base44 } from '@/api/base44Client';
 import { escapeRegex } from '@/lib/utils';
 import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
@@ -156,11 +156,12 @@ export default function Cobros() {
       }
 
       // Eliminar movimientos de cuenta corriente relacionados (revertir saldo_actual antes)
-      const movimientosCC = await base44.entities.CuentaCorriente.list();
-      const movsCCCobro = movimientosCC.filter(m => 
-        m.comprobante_id === cobro.id && (m.comprobante_tipo === 'Cobro' || m.comprobante_tipo === 'Retencion')
-      );
-      for (const movCC of movsCCCobro) {
+      const [movsCCCobro, movsCCRetencion] = await Promise.all([
+        base44.entities.CuentaCorriente.filter({ comprobante_tipo: 'Cobro', comprobante_id: cobro.id }),
+        base44.entities.CuentaCorriente.filter({ comprobante_tipo: 'Retencion', comprobante_id: cobro.id })
+      ]);
+      const movsCCCobroTodos = [...(Array.isArray(movsCCCobro) ? movsCCCobro : [movsCCCobro]).filter(Boolean), ...(Array.isArray(movsCCRetencion) ? movsCCRetencion : [movsCCRetencion]).filter(Boolean)];
+      for (const movCC of movsCCCobroTodos) {
         await actualizarSaldoEntidad(base44, 'Cliente', cobro.cliente_id, movCC.monto || 0);
         await base44.entities.CuentaCorriente.delete(movCC.id);
       }
@@ -177,14 +178,8 @@ export default function Cobros() {
         });
       }
 
-      // Eliminar IngresoVario del Estado de Resultados si existe
-      const ingresosVarios = await base44.entities.IngresoVario.list();
-      const ingresosRelacionados = ingresosVarios.filter(iv => 
-        iv.notas && iv.notas.includes(`ID: ${cobro.id}`)
-      );
-      for (const ingreso of ingresosRelacionados) {
-        await base44.entities.IngresoVario.delete(ingreso.id);
-      }
+      // No borramos IngresoVario: es inseguro sin un ID de enlace (cobro_id). Evitamos list() masivo y borrados por adivinación.
+      // TODO: Implementar borrado seguro cuando exista cobro_id en IngresoVario.
 
       // Eliminar todos los movimientos de tesorería vinculados
       for (const mov of movimientosVinculados) {

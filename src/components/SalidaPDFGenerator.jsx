@@ -353,8 +353,8 @@ export async function shareSalidaWhatsApp(salida, whatsappNumber) {
         await navigator.share(shareData);
         return;
       }
-    } catch (error) {
-      console.log('Web Share API no disponible o cancelado');
+    } catch {
+      // Web Share API no disponible o usuario canceló
     }
   }
 

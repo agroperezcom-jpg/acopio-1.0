@@ -37,10 +37,6 @@ export function useCorreccionPreciosSalidas() {
     if (!salidas || salidas.length === 0 || !periodosPrecios) return;
 
     const corregirPreciosSalidas = async () => {
-      console.log('\n═══════════════════════════════════════════════════════════════════');
-      console.log('💰 CORRECCIÓN RETROACTIVA - PRECIOS EN SALIDAS Y CUENTA CORRIENTE');
-      console.log('═══════════════════════════════════════════════════════════════════\n');
-
       try {
         const obtenerPrecioVigente = (productoId, fecha) => {
           const preciosOrdenados = periodosPrecios
@@ -75,15 +71,7 @@ export function useCorreccionPreciosSalidas() {
             const deuda = kilosEfectivos * precioVigente;
             deudaTotalNueva += deuda;
 
-            // Verificar si el precio cambió
-            if (d.precio_kg !== precioVigente) {
-              necesitaActualizacion = true;
-              console.log(`   ${salida.numero_remito} - ${d.producto_nombre}:`);
-              console.log(`      Precio anterior: $${(d.precio_kg || 0).toFixed(2)}/kg`);
-              console.log(`      Precio vigente: $${precioVigente.toFixed(2)}/kg`);
-              console.log(`      Kilos efectivos: ${kilosEfectivos.toFixed(2)} kg`);
-              console.log(`      Deuda: $${deuda.toFixed(2)}\n`);
-            }
+            if (d.precio_kg !== precioVigente) necesitaActualizacion = true;
 
             return {
               ...d,
@@ -97,8 +85,6 @@ export function useCorreccionPreciosSalidas() {
               detalles: detallesActualizados,
               deuda_total: deudaTotalNueva
             });
-
-            console.log(`   ✅ ${salida.numero_remito}: Deuda actualizada de $${(salida.deuda_total || 0).toFixed(2)} → $${deudaTotalNueva.toFixed(2)}\n`);
             salidasActualizadas++;
 
             // Actualizar movimiento de cuenta corriente si existe
@@ -116,8 +102,6 @@ export function useCorreccionPreciosSalidas() {
                   monto: deudaTotalNueva,
                   saldo_resultante: (movCC.saldo_resultante || 0) + diferencia
                 });
-                
-                console.log(`   ✅ Cuenta Corriente actualizada: ${salida.cliente_nombre} - $${deudaTotalNueva.toFixed(2)}`);
                 movimientosCCActualizados++;
               }
             }
@@ -125,8 +109,6 @@ export function useCorreccionPreciosSalidas() {
         }
 
         // ELIMINAR DUPLICADOS Y RECALCULAR SALDOS
-        console.log('\n🗑️ LIMPIANDO DUPLICADOS EN CUENTA CORRIENTE...\n');
-
         const todosLosMovCC = await listAll(base44.entities.CuentaCorriente, '-fecha');
         
         // Detectar y eliminar duplicados (mismo comprobante_id + comprobante_tipo)
@@ -137,9 +119,7 @@ export function useCorreccionPreciosSalidas() {
           if (mov.comprobante_id && mov.comprobante_tipo === 'SalidaFruta') {
             const key = `${mov.comprobante_tipo}-${mov.comprobante_id}`;
             if (movimientosUnicos.has(key)) {
-              // Ya existe, este es un duplicado
               duplicadosAEliminar.push(mov.id);
-              console.log(`   🗑️ Duplicado detectado: ${mov.concepto} (${mov.id})`);
             } else {
               movimientosUnicos.set(key, mov);
             }
@@ -149,20 +129,11 @@ export function useCorreccionPreciosSalidas() {
           }
         }
 
-        // Eliminar duplicados
         for (const id of duplicadosAEliminar) {
           await base44.entities.CuentaCorriente.delete(id);
-          console.log(`   ✅ Eliminado duplicado: ${id}`);
         }
 
-        console.log(`\n📊 Total duplicados eliminados: ${duplicadosAEliminar.length}\n`);
-
-        // Obtener movimientos limpios
         const movimientosLimpios = await listAll(base44.entities.CuentaCorriente, '-fecha');
-        
-        // Agrupar por cliente y recalcular saldos
-        console.log('🧮 RECALCULANDO SALDOS RESULTANTES...\n');
-        
         const porCliente = {};
         movimientosLimpios.forEach(mov => {
           if (mov.entidad_tipo === 'Cliente') {
@@ -189,17 +160,7 @@ export function useCorreccionPreciosSalidas() {
               saldo_resultante: saldoAcumulado
             });
           }
-          
-          const nombreCliente = movsOrdenados[0]?.entidad_nombre || 'Desconocido';
-          console.log(`✅ ${nombreCliente}: Saldo final = $${saldoAcumulado.toFixed(2)}`);
         }
-
-        console.log('\n═══════════════════════════════════════════════════════════════════');
-        console.log('✅ CORRECCIÓN COMPLETADA');
-        console.log('═══════════════════════════════════════════════════════════════════');
-        console.log(`   Salidas actualizadas: ${salidasActualizadas}`);
-        console.log(`   Movimientos CC actualizados: ${movimientosCCActualizados}`);
-        console.log('═══════════════════════════════════════════════════════════════════\n');
 
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           fecha: new Date().toISOString(),

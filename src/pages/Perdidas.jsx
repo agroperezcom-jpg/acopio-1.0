@@ -1,16 +1,20 @@
 import React, { useMemo, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { AlertTriangle, TrendingDown, Scale, FileDown } from "lucide-react";
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import { AlertTriangle, TrendingDown, Scale, FileDown } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import { base44 } from '@/api/base44Client';
 
 export default function Perdidas() {
-  const [rango, setRango] = useState(null);
+  const [rango, setRango] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
 
   const PAGE_SIZE = 500;
 
@@ -222,8 +226,10 @@ export default function Perdidas() {
           )}
         </div>
 
-        <DateRangeToolbar
-          onRangeChange={({ desde, hasta }) => setRango({ desde, hasta })}
+        <DateRangeSelector
+          startDate={rango.desde}
+          endDate={rango.hasta}
+          onChange={({ start, end }) => setRango({ desde: start, hasta: end })}
           className="mb-4"
         />
 
@@ -233,13 +239,6 @@ export default function Perdidas() {
               <AlertTriangle className="h-16 w-16 text-red-300 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-slate-700 mb-2">Error al cargar datos</h3>
               <p className="text-slate-500">No se pudieron cargar las salidas. Intenta recargar la página.</p>
-            </CardContent>
-          </Card>
-        ) : !rango ? (
-          <Card className="border-0 shadow-lg">
-            <CardContent className="p-12 text-center">
-              <TrendingDown className="h-16 w-16 text-slate-300 mx-auto mb-4" />
-              <p className="text-slate-500">Cargando rango de fechas...</p>
             </CardContent>
           </Card>
         ) : isLoading ? (

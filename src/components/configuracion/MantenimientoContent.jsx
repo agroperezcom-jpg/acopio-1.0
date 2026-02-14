@@ -1,65 +1,23 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Wrench, Loader2, RefreshCw, Package, Scale } from "lucide-react";
+import { Loader2, Package, Scale } from "lucide-react";
 
 export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarCorreccion, progresoSincronizacion = '' }) {
   const correcciones = [
     {
-      id: 'sincronizarSaldos',
-      titulo: 'Sincronizar Saldos',
-      descripcion: 'Recalcula saldo_actual de cada Proveedor y Cliente desde el historial de movimientos (por lotes, sin saturar la API).',
-      tipo: 'sincronizarSaldos',
-      icon: RefreshCw
-    },
-    {
       id: 'correccionSaldosEnvases',
-      titulo: 'Inicializar saldos de envases',
-      descripcion: 'Recalcula saldo_envases de cada Proveedor y Cliente desde todo el historial (Ingresos, Salidas, Movimientos de Envases). Sincroniza con la nueva estructura de datos.',
+      titulo: 'Recalcular Saldos de Envases',
+      descripcion: 'Recalcula el stock físico (ocupados/vacíos) de cada tipo de envase y el saldo_envases de cada Proveedor y Cliente desde todo el historial. Un solo botón para reparar todo lo relacionado con envases.',
       tipo: 'correccionSaldosEnvases',
       icon: Package
     },
     {
       id: 'recalcularSaldosDesdeCC',
-      titulo: 'Reparar saldo_actual desde Cuenta Corriente',
+      titulo: 'Recalcular Saldos de Cuentas Corrientes',
       descripcion: 'Sincroniza saldo_actual de cada Proveedor y Cliente con la tabla CuentaCorriente: suma Haber, resta Debe (solo montos ya guardados). No recalcula precios.',
       tipo: 'recalcularSaldosDesdeCC',
       icon: Scale
-    },
-    {
-      id: 'autoRetroactiva',
-      titulo: 'Corrección Automática Retroactiva',
-      descripcion: 'Corrige pérdidas de productos y stocks de envases desde el inicio',
-      tipo: 'autoRetroactiva',
-      icon: Wrench
-    },
-    {
-      id: 'envasesRetroactiva',
-      titulo: 'Corrección de Envases Retroactiva',
-      descripcion: 'Recalcula stocks de envases ocupados y vacíos',
-      tipo: 'envasesRetroactiva',
-      icon: Wrench
-    },
-    {
-      id: 'segregacionEnvases',
-      titulo: 'Corrección de Segregación de Envases',
-      descripcion: 'Separa correctamente envases ocupados y vacíos',
-      tipo: 'segregacionEnvases',
-      icon: Wrench
-    },
-    {
-      id: 'cuentaCorriente',
-      titulo: 'Corregir Saldos de Cuenta Corriente',
-      descripcion: 'Recalcula deudas y saldos de cuenta corriente',
-      tipo: 'cuentaCorriente',
-      icon: Wrench
-    },
-    {
-      id: 'preciosSalidas',
-      titulo: 'Corrección de Precios en Salidas',
-      descripcion: 'Actualiza precios en salidas según períodos vigentes',
-      tipo: 'preciosSalidas',
-      icon: Wrench
     }
   ];
 
@@ -78,7 +36,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
           <CardTitle>Procesos de Corrección</CardTitle>
         </CardHeader>
         <CardContent>
-          {progresoSincronizacion && (ejecutandoCorreccion === 'sincronizarSaldos' || ejecutandoCorreccion === 'correccionSaldosEnvases' || ejecutandoCorreccion === 'recalcularSaldosDesdeCC') && (
+          {progresoSincronizacion && (ejecutandoCorreccion === 'correccionSaldosEnvases' || ejecutandoCorreccion === 'recalcularSaldosDesdeCC') && (
             <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
               <p className="font-medium">Progreso:</p>
               <p className="mt-1">{progresoSincronizacion}</p>
@@ -86,8 +44,7 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
           )}
           <div className="grid gap-4 md:grid-cols-2">
             {correcciones.map((correccion) => {
-              const Icon = correccion.icon || Wrench;
-              const esSincronizar = correccion.tipo === 'sincronizarSaldos';
+              const Icon = correccion.icon;
               const esSaldosEnvases = correccion.tipo === 'correccionSaldosEnvases';
               const esRecalcularCC = correccion.tipo === 'recalcularSaldosDesdeCC';
               return (
@@ -106,12 +63,12 @@ export default function MantenimientoContent({ ejecutandoCorreccion, onEjecutarC
                     {ejecutandoCorreccion === correccion.tipo ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {esSincronizar ? 'Sincronizando...' : esSaldosEnvases ? 'Inicializando saldos...' : esRecalcularCC ? 'Reparando saldos...' : 'Ejecutando...'}
+                        {esSaldosEnvases ? 'Recalculando...' : 'Recalculando...'}
                       </>
                     ) : (
                       <>
                         <Icon className="h-4 w-4 mr-2" />
-                        {esSincronizar ? 'Sincronizar Saldos' : esSaldosEnvases ? 'Inicializar saldos de envases' : esRecalcularCC ? 'Reparar saldo_actual desde CC' : 'Ejecutar Corrección'}
+                        {esSaldosEnvases ? 'Recalcular Saldos de Envases' : 'Recalcular Saldos de Cuentas Corrientes'}
                       </>
                     )}
                   </Button>

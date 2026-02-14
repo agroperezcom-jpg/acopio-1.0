@@ -8,11 +8,12 @@ import { FileText, TrendingUp, TrendingDown, DollarSign, Calendar, Download, Fil
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import SearchableSelect from "@/components/SearchableSelect";
-import { format, parseISO, isWithinInterval, startOfMonth, subMonths, startOfYear, endOfMonth } from 'date-fns';
+import { format, parseISO, isWithinInterval, startOfMonth } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { usePreciosCache } from '@/components/hooks/usePreciosCache';
 import { exportarExcel } from '@/components/ExportarExcel';
 import { toast } from 'sonner';
+import DateRangeSelector from '@/components/DateRangeSelector';
 
 export default function InformesContables() {
   const [activeTab, setActiveTab] = useState('situacion');
@@ -22,10 +23,8 @@ export default function InformesContables() {
   const [informeGenerado, setInformeGenerado] = useState(false);
   const [advertenciaTruncado, setAdvertenciaTruncado] = useState(false);
   
-  // Estados para Informe de Proveedores
+  // Estados para Informe de Proveedores (usa fechaDesde/fechaHasta globales)
   const [proveedoresInforme, setProveedoresInforme] = useState([]);
-  const [fechaDesdeProveedores, setFechaDesdeProveedores] = useState('');
-  const [fechaHastaProveedores, setFechaHastaProveedores] = useState('');
   const [productosFiltroProveedores, setProductosFiltroProveedores] = useState([]);
   
 
@@ -33,12 +32,10 @@ export default function InformesContables() {
   // Hook centralizado para caché de precios
   const { obtenerPrecioVigente: obtenerPrecioVigenteCache } = usePreciosCache();
 
-  // Estados para Informes Operativos
+  // Estados para Informes Operativos (usa fechaDesde/fechaHasta globales)
   const [tipoInforme, setTipoInforme] = useState('proveedor');
   const [proveedoresSeleccionados, setProveedoresSeleccionados] = useState([]);
   const [clientesSeleccionados, setClientesSeleccionados] = useState([]);
-  const [fechaDesdeOp, setFechaDesdeOp] = useState('');
-  const [fechaHastaOp, setFechaHastaOp] = useState('');
   const [productosSeleccionados, setProductosSeleccionados] = useState([]);
   const [busquedaProveedor, setBusquedaProveedor] = useState('');
   const [busquedaCliente, setBusquedaCliente] = useState('');
@@ -262,9 +259,9 @@ export default function InformesContables() {
 
   const isLoadingInforme = loadingMovimientos || loadingSalidas || loadingEgresos || loadingIngresos || loadingPagos || loadingCobros || loadingMovTesoreria;
 
-  const aplicarRangoRapido = (desde, hasta) => {
-    setFechaDesde(format(desde, "yyyy-MM-dd"));
-    setFechaHasta(format(hasta, "yyyy-MM-dd"));
+  const handleRangoFechasChange = ({ start, end }) => {
+    setFechaDesde(format(start, 'yyyy-MM-dd'));
+    setFechaHasta(format(end, 'yyyy-MM-dd'));
     setInformeGenerado(false);
   };
 
@@ -556,8 +553,8 @@ export default function InformesContables() {
         if (m.tipo_movimiento !== 'Ingreso de Fruta') return false;
         if (!proveedoresSeleccionados.includes(m.proveedor_id)) return false;
         const fechaMov = new Date(m.fecha);
-        if (fechaDesdeOp && fechaMov < new Date(fechaDesdeOp)) return false;
-        if (fechaHastaOp && fechaMov > new Date(fechaHastaOp + 'T23:59:59')) return false;
+        if (fechaDesde && fechaMov < new Date(fechaDesde)) return false;
+        if (fechaHasta && fechaMov > new Date(fechaHasta + 'T23:59:59')) return false;
         return true;
       });
     } else {
@@ -565,22 +562,22 @@ export default function InformesContables() {
       const movCliente = movimientos.filter(m => {
         if (!clientesSeleccionados.includes(m.cliente_id)) return false;
         const fechaMov = new Date(m.fecha);
-        if (fechaDesdeOp && fechaMov < new Date(fechaDesdeOp)) return false;
-        if (fechaHastaOp && fechaMov > new Date(fechaHastaOp + 'T23:59:59')) return false;
+        if (fechaDesde && fechaMov < new Date(fechaDesde)) return false;
+        if (fechaHasta && fechaMov > new Date(fechaHasta + 'T23:59:59')) return false;
         return true;
       });
 
       const salidasCliente = salidas.filter(s => {
         if (!clientesSeleccionados.includes(s.cliente_id)) return false;
         const fechaSal = new Date(s.fecha);
-        if (fechaDesdeOp && fechaSal < new Date(fechaDesdeOp)) return false;
-        if (fechaHastaOp && fechaSal > new Date(fechaHastaOp + 'T23:59:59')) return false;
+        if (fechaDesde && fechaSal < new Date(fechaDesde)) return false;
+        if (fechaHasta && fechaSal > new Date(fechaHasta + 'T23:59:59')) return false;
         return true;
       });
 
       return [...movCliente, ...salidasCliente].sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
     }
-  }, [movimientos, salidas, tipoInforme, proveedoresSeleccionados, clientesSeleccionados, fechaDesdeOp, fechaHastaOp]);
+  }, [movimientos, salidas, tipoInforme, proveedoresSeleccionados, clientesSeleccionados, fechaDesde, fechaHasta]);
 
   const totalesOperativos = useMemo(() => {
     const totalesProductos = {};
@@ -628,7 +625,7 @@ export default function InformesContables() {
 
 
   const exportarPDF = () => {
-    const periodoText = `${fechaDesdeOp ? format(new Date(fechaDesdeOp), 'dd/MM/yyyy') : 'Inicio'} - ${fechaHastaOp ? format(new Date(fechaHastaOp), 'dd/MM/yyyy') : 'Hoy'}`;
+    const periodoText = `${fechaDesde ? format(new Date(fechaDesde), 'dd/MM/yyyy') : 'Inicio'} - ${fechaHasta ? format(new Date(fechaHasta), 'dd/MM/yyyy') : 'Hoy'}`;
     let headers = [];
     if (camposSeleccionados.fecha) headers.push('<th>Fecha</th>');
     if (entidadesSeleccionadas.length > 1) {
@@ -779,77 +776,12 @@ export default function InformesContables() {
         {/* Panel de Control de Rango de Fechas */}
         <Card className="border-0 shadow-lg mb-6 bg-gradient-to-r from-blue-50 to-indigo-50">
           <CardContent className="p-6">
-            <div className="flex flex-wrap gap-2 mb-4">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => aplicarRangoRapido(startOfMonth(new Date()), new Date())}
-                className="text-xs"
-              >
-                Este Mes
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => aplicarRangoRapido(
-                  startOfMonth(subMonths(new Date(), 1)),
-                  endOfMonth(subMonths(new Date(), 1))
-                )}
-                className="text-xs"
-              >
-                Mes Pasado
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => aplicarRangoRapido(
-                  startOfMonth(subMonths(new Date(), 2)),
-                  new Date()
-                )}
-                className="text-xs"
-              >
-                Últimos 3 Meses
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => aplicarRangoRapido(startOfYear(new Date()), new Date())}
-                className="text-xs"
-              >
-                Este Año
-              </Button>
-            </div>
-            <div className="flex flex-col md:flex-row items-start md:items-end gap-4">
-              <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-semibold text-slate-700 mb-2 block">Fecha Desde *</label>
-                  <Input
-                    type="date"
-                    value={fechaDesde}
-                    onChange={(e) => {
-                      setFechaDesde(e.target.value);
-                      setInformeGenerado(false);
-                    }}
-                    className="bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-semibold text-slate-700 mb-2 block">Fecha Hasta *</label>
-                  <Input
-                    type="date"
-                    value={fechaHasta}
-                    onChange={(e) => {
-                      setFechaHasta(e.target.value);
-                      setInformeGenerado(false);
-                    }}
-                    className="bg-white"
-                  />
-                </div>
-              </div>
+            <div className="flex flex-col md:flex-row flex-wrap items-start md:items-center gap-4">
+              <DateRangeSelector
+                startDate={fechaDesde}
+                endDate={fechaHasta}
+                onChange={handleRangoFechasChange}
+              />
               <Button
                 onClick={handleGenerarInforme}
                 disabled={isLoadingInforme || !fechaDesde || !fechaHasta}
@@ -1145,24 +1077,6 @@ export default function InformesContables() {
                   </Card>
                 ) : (
                 <>
-                <Card className="border-0 shadow-md mb-6">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Seleccionar Período</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-sm font-medium text-slate-700 mb-1 block">Fecha Desde</label>
-                        <Input type="date" value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-slate-700 mb-1 block">Fecha Hasta</label>
-                        <Input type="date" value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
                 <Card className="border-0 shadow-md">
                   <CardHeader className="bg-blue-50 flex flex-row items-start justify-between">
                     <div>
@@ -1476,16 +1390,6 @@ export default function InformesContables() {
                       )}
 
                       <div>
-                        <label className="text-sm font-medium text-slate-700 mb-1 block">Fecha Desde</label>
-                        <Input type="date" value={fechaDesdeOp} onChange={(e) => setFechaDesdeOp(e.target.value)} />
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-medium text-slate-700 mb-1 block">Fecha Hasta</label>
-                        <Input type="date" value={fechaHastaOp} onChange={(e) => setFechaHastaOp(e.target.value)} />
-                      </div>
-
-                      <div>
                         <label className="text-sm font-medium text-slate-700 mb-2 block">Productos</label>
                         <div className="max-h-48 overflow-y-auto space-y-2 p-3 bg-slate-50 rounded-lg border">
                           {productos.map(p => (
@@ -1743,17 +1647,6 @@ export default function InformesContables() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="text-sm font-medium text-slate-700 mb-1 block">Desde</label>
-                              <Input type="date" value={fechaDesdeProveedores} onChange={(e) => setFechaDesdeProveedores(e.target.value)} />
-                            </div>
-                            <div>
-                              <label className="text-sm font-medium text-slate-700 mb-1 block">Hasta</label>
-                              <Input type="date" value={fechaHastaProveedores} onChange={(e) => setFechaHastaProveedores(e.target.value)} />
-                            </div>
-                          </div>
-
                           <div>
                             <label className="text-sm font-medium text-slate-700 mb-2 block">Productos (opcional)</label>
                             <div className="max-h-32 overflow-y-auto space-y-1 p-2 bg-slate-50 rounded-lg border">
@@ -1809,8 +1702,8 @@ export default function InformesContables() {
                                     movimientos.forEach(m => {
                                       if (m.tipo_movimiento === 'Ingreso de Fruta' && m.proveedor_id === provId) {
                                         const fechaMov = new Date(m.fecha);
-                                        const cumpleFecha = (!fechaDesdeProveedores || fechaMov >= new Date(fechaDesdeProveedores)) &&
-                                                          (!fechaHastaProveedores || fechaMov <= new Date(fechaHastaProveedores + 'T23:59:59'));
+                                        const cumpleFecha = (!fechaDesde || fechaMov >= new Date(fechaDesde)) &&
+                                                          (!fechaHasta || fechaMov <= new Date(fechaHasta + 'T23:59:59'));
                                         if (cumpleFecha && m.pesajes) {
                                           m.pesajes.forEach(p => {
                                             if (!productosFiltroProveedores.length || productosFiltroProveedores.includes(p.producto_id)) {
@@ -1873,7 +1766,7 @@ export default function InformesContables() {
                                     </tr>`;
                                   }).join('');
 
-                                  const periodoText = `${fechaDesdeProveedores ? format(new Date(fechaDesdeProveedores), 'dd/MM/yyyy') : 'Inicio'} - ${fechaHastaProveedores ? format(new Date(fechaHastaProveedores), 'dd/MM/yyyy') : 'Actual'}`;
+                                  const periodoText = `${fechaDesde ? format(new Date(fechaDesde), 'dd/MM/yyyy') : 'Inicio'} - ${fechaHasta ? format(new Date(fechaHasta), 'dd/MM/yyyy') : 'Actual'}`;
 
                                   const html = `
                                     <!DOCTYPE html>
@@ -1933,8 +1826,8 @@ export default function InformesContables() {
                                     movimientos.forEach(m => {
                                       if (m.tipo_movimiento === 'Ingreso de Fruta' && m.proveedor_id === provId) {
                                         const fechaMov = new Date(m.fecha);
-                                        const cumpleFecha = (!fechaDesdeProveedores || fechaMov >= new Date(fechaDesdeProveedores)) &&
-                                                          (!fechaHastaProveedores || fechaMov <= new Date(fechaHastaProveedores + 'T23:59:59'));
+                                        const cumpleFecha = (!fechaDesde || fechaMov >= new Date(fechaDesde)) &&
+                                                          (!fechaHasta || fechaMov <= new Date(fechaHasta + 'T23:59:59'));
                                         if (cumpleFecha && m.pesajes) {
                                           m.pesajes.forEach(p => {
                                             if (!productosFiltroProveedores.length || productosFiltroProveedores.includes(p.producto_id)) {
@@ -2020,8 +1913,8 @@ export default function InformesContables() {
                                       movimientos.forEach(m => {
                                         if (m.tipo_movimiento === 'Ingreso de Fruta' && proveedoresInforme.includes(m.proveedor_id)) {
                                           const fechaMov = new Date(m.fecha);
-                                          const cumpleFecha = (!fechaDesdeProveedores || fechaMov >= new Date(fechaDesdeProveedores)) &&
-                                                            (!fechaHastaProveedores || fechaMov <= new Date(fechaHastaProveedores + 'T23:59:59'));
+                                          const cumpleFecha = (!fechaDesde || fechaMov >= new Date(fechaDesde)) &&
+                                                            (!fechaHasta || fechaMov <= new Date(fechaHasta + 'T23:59:59'));
                                           if (cumpleFecha && m.pesajes) {
                                             m.pesajes.forEach(p => {
                                               if (!productosFiltroProveedores.length || productosFiltroProveedores.includes(p.producto_id)) {
@@ -2051,8 +1944,8 @@ export default function InformesContables() {
                                     movimientos.forEach(m => {
                                       if (m.tipo_movimiento === 'Ingreso de Fruta' && m.proveedor_id === provId) {
                                         const fechaMov = new Date(m.fecha);
-                                        const cumpleFecha = (!fechaDesdeProveedores || fechaMov >= new Date(fechaDesdeProveedores)) &&
-                                                          (!fechaHastaProveedores || fechaMov <= new Date(fechaHastaProveedores + 'T23:59:59'));
+                                        const cumpleFecha = (!fechaDesde || fechaMov >= new Date(fechaDesde)) &&
+                                                          (!fechaHasta || fechaMov <= new Date(fechaHasta + 'T23:59:59'));
                                         if (cumpleFecha && m.pesajes) {
                                           m.pesajes.forEach(p => {
                                             if (!productosFiltroProveedores.length || productosFiltroProveedores.includes(p.producto_id)) {
@@ -2095,8 +1988,8 @@ export default function InformesContables() {
                                     movimientos.forEach(m => {
                                       if (m.tipo_movimiento === 'Ingreso de Fruta' && proveedoresInforme.includes(m.proveedor_id)) {
                                         const fechaMov = new Date(m.fecha);
-                                        const cumpleFecha = (!fechaDesdeProveedores || fechaMov >= new Date(fechaDesdeProveedores)) &&
-                                                          (!fechaHastaProveedores || fechaMov <= new Date(fechaHastaProveedores + 'T23:59:59'));
+                                        const cumpleFecha = (!fechaDesde || fechaMov >= new Date(fechaDesde)) &&
+                                                          (!fechaHasta || fechaMov <= new Date(fechaHasta + 'T23:59:59'));
                                         if (cumpleFecha && m.pesajes) {
                                           m.pesajes.forEach(p => {
                                             if (!productosFiltroProveedores.length || productosFiltroProveedores.includes(p.producto_id)) {

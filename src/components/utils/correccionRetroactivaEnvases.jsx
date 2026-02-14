@@ -28,10 +28,6 @@ import { listAll } from '@/utils/listAllPaginado';
  */
 export async function correccionRetroactivaEnvases(base44) {
   try {
-    console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-    console.log('║  🔧 CORRECCIÓN RETROACTIVA ABSOLUTA - ENVASES OCUPADOS/VACÍOS   ║');
-    console.log('╚═══════════════════════════════════════════════════════════════════╝\n');
-    
     // Obtener todos los datos necesarios (paginado para escalar a 10k+ registros)
     const [envases, movimientos, salidas] = await Promise.all([
       listAll(base44.entities.Envase, 'tipo'),
@@ -189,52 +185,8 @@ export async function correccionRetroactivaEnvases(base44) {
         });
         
         totalEnvasesAjustados += Math.abs(diferenciaOcupados) + Math.abs(diferenciaVacios);
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log(`🔧 CORRECCIÓN APLICADA - Envase: ${envase.tipo}`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log(`   📦 OCUPADOS (CON FRUTA):`);
-        console.log(`      Anterior: ${ocupadosActual} unidades`);
-        console.log(`      Correcto: ${stockOcupadosCorrecto} unidades`);
-        console.log(`      Diferencia: ${diferenciaOcupados} unidades`);
-        console.log(`   `);
-        console.log(`   📦 VACÍOS (SIN FRUTA):`);
-        console.log(`      Anterior: ${vaciosActual} unidades`);
-        console.log(`      Correcto: ${stockVaciosCorrecto} unidades`);
-        console.log(`      Diferencia: ${diferenciaVacios} unidades`);
-        console.log(`   `);
-        console.log(`   📊 MOVIMIENTOS PROCESADOS: ${detalleMovimientos.length}`);
-        if (detalleMovimientos.length > 0 && detalleMovimientos.length <= 10) {
-          console.log(`   📋 DETALLE:`);
-          detalleMovimientos.forEach((mov, idx) => {
-            console.log(`      ${idx + 1}. ${mov.tipo} - ${mov.operacion} (O:${mov.ocupados}, V:${mov.vacios})`);
-          });
-        } else if (detalleMovimientos.length > 10) {
-          console.log(`   📋 (Mostrando últimos 5 de ${detalleMovimientos.length}):`);
-          detalleMovimientos.slice(-5).forEach((mov, idx) => {
-            console.log(`      ${detalleMovimientos.length - 4 + idx}. ${mov.tipo} - ${mov.operacion} (O:${mov.ocupados}, V:${mov.vacios})`);
-          });
-        }
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
       }
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // RESUMEN DE CORRECCIÓN
-    // ═══════════════════════════════════════════════════════════════
-    
-    console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-    console.log('║  ✅ CORRECCIÓN RETROACTIVA DE ENVASES COMPLETADA                ║');
-    console.log('╚═══════════════════════════════════════════════════════════════════╝');
-    console.log(`   Envases Corregidos: ${correcciones.length}`);
-    console.log(`   Unidades Ajustadas (total): ${totalEnvasesAjustados}`);
-    console.log(`   `);
-    console.log(`   🔐 GARANTÍA DE CORRECCIÓN v4:`);
-    console.log(`      • Stocks recalculados con LÓGICA REAL DEL NEGOCIO`);
-    console.log(`      • Devoluciones de proveedores NO suman a stock`);
-    console.log(`      • Entregas SIEMPRE restan de Stock Vacíos`);
-    console.log(`      • Devoluciones de clientes SÍ suman a stock`);
-    console.log('════════════════════════════════════════════════════════════════════\n');
 
     return {
       corregidos: correcciones.length,

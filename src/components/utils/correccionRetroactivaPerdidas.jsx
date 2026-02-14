@@ -25,10 +25,6 @@ import { listAll } from '@/utils/listAllPaginado';
  */
 export async function correccionRetroactivaPerdidas(base44) {
   try {
-    console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-    console.log('║  🔧 CORRECCIÓN RETROACTIVA ABSOLUTA - PÉRDIDAS IRREVERSIBLES     ║');
-    console.log('╚═══════════════════════════════════════════════════════════════════╝\n');
-    
     // Obtener todos los datos necesarios (paginado para escalar a 10k+ registros)
     const [productos, movimientos, salidas] = await Promise.all([
       listAll(base44.entities.Producto, 'fruta'),
@@ -141,55 +137,9 @@ export async function correccionRetroactivaPerdidas(base44) {
         });
         
         totalKgAjustados = sumaExacta(totalKgAjustados, Math.abs(diferencia));
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log(`🔧 CORRECCIÓN APLICADA - Salida ID: N/A (Retroactivo)`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log(`   Producto: ${producto.producto_completo || `${producto.fruta} - ${producto.variedad}`}`);
-        console.log(`   Stock Anterior (CON ERROR): ${stockActual.toFixed(2)} kg`);
-        console.log(`   Stock Correcto (RECALCULADO): ${stockCorrecto.toFixed(2)} kg`);
-        console.log(`   Diferencia Eliminada: ${diferencia.toFixed(2)} kg`);
-        console.log(`   `);
-        console.log(`   📊 CÁLCULO ATÓMICO:`);
-        console.log(`      Total Ingresado: ${totalIngresado.toFixed(2)} kg`);
-        console.log(`      Total Salido (Originales): ${totalSalidoOriginal.toFixed(2)} kg`);
-        console.log(`      Pérdidas Acumuladas: ${totalPerdidasProducto.toFixed(2)} kg`);
-        console.log(`      └─ Incluidas en Salidas, NO retornadas al stock`);
-        console.log(`   `);
-        if (salidasDetalle.length > 0) {
-          console.log(`   📦 DETALLE DE SALIDAS:`);
-          salidasDetalle.forEach(s => {
-            if (s.estado === 'Pendiente') {
-              console.log(`      • ${s.numero}: ${s.originales.toFixed(2)} kg (Pendiente)`);
-            } else {
-              console.log(`      • ${s.numero}: Orig=${s.originales.toFixed(2)} kg, Reales=${s.reales.toFixed(2)} kg, Desc=${s.descuento.toFixed(2)} kg, Pérdida=${s.perdida.toFixed(2)} kg`);
-            }
-          });
-        }
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-        
         totalPerdidaGlobal = sumaExacta(totalPerdidaGlobal, totalPerdidasProducto);
       }
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // RESUMEN DE CORRECCIÓN
-    // ═══════════════════════════════════════════════════════════════
-    
-    console.log('\n╔═══════════════════════════════════════════════════════════════════╗');
-    console.log('║  ✅ CORRECCIÓN RETROACTIVA COMPLETADA                            ║');
-    console.log('╚═══════════════════════════════════════════════════════════════════╝');
-    console.log(`   Productos Corregidos: ${correcciones.length}`);
-    console.log(`   Kilos Ajustados (total absoluto): ${totalKgAjustados.toFixed(2)} kg`);
-    console.log(`   Pérdidas Totales Definitivas: ${totalPerdidaGlobal.toFixed(2)} kg`);
-    console.log(`   └─ NO sumadas de vuelta al stock (eliminadas correctamente)`);
-    console.log(`   `);
-    console.log(`   🔐 GARANTÍA DE CORRECCIÓN:`);
-    console.log(`      • Todos los stocks recalculados desde CERO`);
-    console.log(`      • Pérdidas tratadas como definitivas e irreversibles`);
-    console.log(`      • Registros históricos ajustados sin recreación`);
-    console.log(`      • Operación idempotente y atómica`);
-    console.log('════════════════════════════════════════════════════════════════════\n');
 
     return {
       corregidos: correcciones.length,
@@ -209,14 +159,6 @@ export async function correccionRetroactivaPerdidas(base44) {
  * Debe ejecutarse antes de confirmar una salida
  */
 export function validarPerdidasNoRetornan(producto, perdidasPorAgregar) {
-  if (perdidasPorAgregar > 0) {
-    console.log('⚠️  VALIDACIÓN: Verificando que pérdidas NO vuelvan al stock...');
-    console.log(`   Producto: ${producto.producto_completo}`);
-    console.log(`   Pérdidas a registrar: ${perdidasPorAgregar.toFixed(2)} kg`);
-    console.log(`   Stock actual: ${(producto.stock || 0).toFixed(2)} kg`);
-    console.log(`   ✓ Pérdidas se registran como DEFINITIVAS (no impactan stock positivamente)`);
-    return true;
-  }
   return true;
 }
 

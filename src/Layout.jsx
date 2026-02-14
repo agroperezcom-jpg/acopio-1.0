@@ -1,15 +1,11 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createPageUrl } from '@/utils';
-import { base44 } from '@/api/base44Client';
-import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { 
-  Apple, 
-  ArrowLeftRight, 
-  History, 
-  FileText, 
-  Package, 
+import {
+  Apple,
+  ArrowLeftRight,
+  History,
+  FileText,
+  Package,
   Menu,
   Home,
   Settings,
@@ -26,8 +22,12 @@ import {
   Landmark,
   HandCoins,
   PiggyBank,
-  Scale
-} from "lucide-react";
+  Scale,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import { createPageUrl } from '@/utils';
+import { base44 } from '@/api/base44Client';
 
 const navItems = [
   { name: 'Inicio', icon: Home, page: 'Home' },

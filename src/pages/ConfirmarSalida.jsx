@@ -84,9 +84,7 @@ export default function ConfirmarSalida({ embedded = false }) {
         const precioVigente = obtenerPrecioVigente(d.producto_id, salida.fecha);
         const deuda = kilosEfectivos * precioVigente;
         deudaTotal += deuda;
-        
-        console.log(`💰 ${d.producto_nombre}: ${kilosEfectivos.toFixed(2)} kg × $${precioVigente.toFixed(2)}/kg = $${deuda.toFixed(2)}`);
-        
+
         return {
           ...d,
           kilos_reales: ajuste.kilos_reales || d.kilos_salida,
@@ -140,8 +138,6 @@ export default function ConfirmarSalida({ embedded = false }) {
             comprobante_tipo: 'SalidaFruta'
           });
           await actualizarSaldoEntidad(base44, 'Cliente', salida.cliente_id, deudaTotal);
-
-          console.log(`✅ Cuenta Corriente actualizada: ${salida.cliente_nombre} - $${deudaTotal.toFixed(2)}`);
         } else {
           // Ya existe, actualizar el monto si cambió
           if (movimientosCC[0].monto !== deudaTotal) {
@@ -151,12 +147,10 @@ export default function ConfirmarSalida({ embedded = false }) {
               saldo_resultante: (movimientosCC[0].saldo_resultante || 0) + diferencia
             });
             await actualizarSaldoEntidad(base44, 'Cliente', salida.cliente_id, diferencia);
-            console.log(`✅ Cuenta Corriente actualizada (reconfirmación): ${salida.cliente_nombre} - $${deudaTotal.toFixed(2)}`);
           }
         }
       }
 
-      // ═══════════════════════════════════════════════════════════════════
       // CORRECCIÓN ABSOLUTA: PÉRDIDAS IRREVERSIBLES - NUNCA VUELVEN AL STOCK
       // ═══════════════════════════════════════════════════════════════════
       // 
@@ -205,50 +199,8 @@ export default function ConfirmarSalida({ embedded = false }) {
               validarPerdidasNoRetornan(producto[0], Math.abs(ajusteTotal));
             }
           }
-          
-          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-          console.log(ajusteTotal < 0 ? `🔴 PÉRDIDA NETA REGISTRADA` : ajusteTotal > 0 ? `🟢 GANANCIA NETA REGISTRADA` : `⚪ SIN AJUSTE NETO`);
-          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-          console.log(`   Producto: ${detalle.producto_nombre}`);
-          console.log(`   Kilos Originales Salidos: ${kilosOriginales.toFixed(2)} kg`);
-          console.log(`   └─ YA RESTADOS del stock en salida inicial`);
-          console.log(`   `);
-          console.log(`   Kilos Reales Recibidos (Báscula Cliente): ${kilosReales.toFixed(2)} kg`);
-          console.log(`   ${ajusteBascula >= 0 ? '🟢' : '🔴'} AJUSTE DE BÁSCULA: ${ajusteBascula >= 0 ? '+' : ''}${ajusteBascula.toFixed(2)} kg ${ajusteBascula > 0 ? '(GANANCIA)' : ajusteBascula < 0 ? '(PÉRDIDA)' : '(SIN CAMBIO)'}`);
-          console.log(`   `);
-          console.log(`   Descuento por Calidad: ${descuentoKg.toFixed(2)} kg`);
-          console.log(`   🔴 PÉRDIDA POR CALIDAD: ${perdidaCalidad.toFixed(2)} kg (NO vuelve)`);
-          console.log(`   `);
-          console.log(`   Kilos Efectivos a Cobrar: ${kilosEfectivos.toFixed(2)} kg`);
-          console.log(`   ${ajusteTotal >= 0 ? '🟢' : '🔴'} AJUSTE TOTAL NETO: ${ajusteTotal >= 0 ? '+' : ''}${ajusteTotal.toFixed(2)} kg`);
-          console.log(`   `);
-          if (ajusteTotal < 0) {
-            console.log(`   ⚠️  Pérdida neta NO vuelve al stock (DEFINITIVA)`);
-            console.log(`   ✅ Validación pasada: Pérdida NO retorna al inventario`);
-          } else if (ajusteTotal > 0) {
-            console.log(`   ℹ️  Ganancia neta registrada (más kilos cobrados)`);
-          } else {
-            console.log(`   ℹ️  Sin ajuste neto (equilibrio perfecto)`);
-          }
-          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         }
       }
-      
-      console.log(`\n═══════════════════════════════════════════════════════════════════`);
-      console.log(`✅ CONFIRMACIÓN COMPLETADA - STOCK NO MODIFICADO`);
-      console.log(`═══════════════════════════════════════════════════════════════════`);
-      if (perdidaTotalGlobal > 0) {
-        console.log(`   PÉRDIDA NETA GLOBAL: ${perdidaTotalGlobal.toFixed(2)} kg`);
-        console.log(`   └─ Registradas como DEFINITIVAS en pérdidas acumuladas`);
-        console.log(`   └─ NO impactan el stock positivamente (no vuelven al inventario)`);
-      } else {
-        console.log(`   Sin pérdidas netas globales (ganancias compensan o superan pérdidas)`);
-      }
-      console.log(`   `);
-      console.log(`   Stock de productos: INTACTO (ya fue reducido en salida original)`);
-      console.log(`   Deuda calculada: Basada en kilos efectivos cobrados`);
-      console.log(`   Nota: Sistema ahora admite ganancias de báscula del cliente`);
-      console.log(`═══════════════════════════════════════════════════════════════════\n`);
 
       return salidaActualizada;
     },

@@ -1,27 +1,31 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Users, Plus, DollarSign, FileText, Calendar, TrendingUp, AlertCircle, Edit, Trash2, MessageCircle, Loader2, Truck } from "lucide-react";
-import { toast } from "sonner";
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { toast } from 'sonner';
+import { Users, Plus, DollarSign, FileText, Calendar, TrendingUp, AlertCircle, Edit, Trash2, MessageCircle, Loader2, Truck } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import LegajoEmpleadoModal from '@/components/empleados/LegajoEmpleadoModal';
 import LiquidacionSueldoModal from '@/components/empleados/LiquidacionSueldoModal';
 import LiquidacionFleteroModal from '@/components/empleados/LiquidacionFleteroModal';
 import FleteroModal from '@/components/empleados/FleteroModal';
 import { descargarPDFLiquidacion, compartirWhatsAppLiquidacion } from '@/components/LiquidacionPDFGenerator';
-import DateRangeToolbar from '@/components/DateRangeToolbar';
+import DateRangeSelector from '@/components/DateRangeSelector';
+import { base44 } from '@/api/base44Client';
 
 export default function Empleados() {
   const queryClient = useQueryClient();
-  const [rango, setRango] = useState(null);
+  const [rango, setRango] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const [activeTab, setActiveTab] = useState('empleados');
   const [legajoModal, setLegajoModal] = useState({ open: false, item: null });
   const [liquidacionModal, setLiquidacionModal] = useState(false);
@@ -591,8 +595,10 @@ export default function Empleados() {
           </h1>
           <p className="text-slate-600 mt-1">Administración de personal, legajos y liquidación de sueldos</p>
           <div className="mt-4">
-            <DateRangeToolbar
-              onRangeChange={({ desde, hasta }) => setRango({ desde, hasta })}
+            <DateRangeSelector
+              startDate={rango.desde}
+              endDate={rango.hasta}
+              onChange={({ start, end }) => setRango({ desde: start, hasta: end })}
             />
           </div>
         </div>

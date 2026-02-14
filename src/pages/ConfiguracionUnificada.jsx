@@ -1,18 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { Settings, BookOpen, DollarSign, Database, Users, Wrench, Lock } from "lucide-react";
-import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
-import { escapeRegex } from '@/lib/utils';
-import { parseCSVLine } from '@/utils/parseCSV';
-import { extraerMensajeError } from '@/utils/extraerMensajeError';
-import { ejecutarCorreccionManual } from '@/utils/ejecutarCorreccionManual';
-import { sincronizarSaldosEntidades } from '@/utils/contabilidad';
-import { usePinGuard } from '@/hooks/usePinGuard';
-import { useSecurity } from '@/lib/SecurityContext';
-
-// Componentes de contenido
+import { Settings, BookOpen, DollarSign, Database, Users, Wrench, Lock, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import ABMContent from '@/components/configuracion/ABMContent';
 import PlanCuentasContent from '@/components/configuracion/PlanCuentasContent';
 import PreciosContent from '@/components/configuracion/PreciosContent';
@@ -20,7 +9,6 @@ import MantenimientoContent from '@/components/configuracion/MantenimientoConten
 import SeguridadContent from '@/components/configuracion/SeguridadContent';
 import CategoriasEmpleadoContent from '@/components/configuracion/CategoriasEmpleadoContent';
 import ImportesConfigContent from '@/components/configuracion/ImportesConfigContent';
-// Modales
 import ABMModal from '@/components/configuracion/modals/ABMModal';
 import CuentaModal from '@/components/configuracion/modals/CuentaModal';
 import PrecioModal from '@/components/configuracion/modals/PrecioModal';
@@ -30,6 +18,13 @@ import DeleteConfirmModal from '@/components/configuracion/modals/DeleteConfirmM
 import CategoriaEmpleadoModal from '@/components/configuracion/modals/CategoriaEmpleadoModal';
 import ImportModal from '@/components/configuracion/modals/ImportModal';
 import ImportBancosModal from '@/components/configuracion/modals/ImportBancosModal';
+import { base44 } from '@/api/base44Client';
+import { escapeRegex } from '@/lib/utils';
+import { useSecurity } from '@/lib/SecurityContext';
+import { parseCSVLine } from '@/utils/parseCSV';
+import { extraerMensajeError } from '@/utils/extraerMensajeError';
+import { ejecutarCorreccionManual } from '@/utils/ejecutarCorreccionManual';
+import { usePinGuard } from '@/hooks/usePinGuard';
 
 export default function ConfiguracionUnificada() {
   const queryClient = useQueryClient();
@@ -187,10 +182,6 @@ export default function ConfiguracionUnificada() {
   // Mutations para PIN
   const guardarPINMutation = useMutation({
     mutationFn: async ({ pinActual, nuevoPin }) => {
-      console.log('=== GUARDANDO PIN ===');
-      console.log('PIN Actual ingresado:', pinActual);
-      console.log('Nuevo PIN:', nuevoPin);
-      
       const esPinActualValido = await verifyPin(pinActual);
       if (!esPinActualValido) {
         console.error('PIN actual incorrecto');
@@ -202,23 +193,18 @@ export default function ConfiguracionUnificada() {
       if (!/^\d+$/.test(nuevoPin)) {
         throw new Error('El PIN debe contener solo números');
       }
-      
-      console.log('Validaciones OK, actualizando en BD...');
-      
+
       if (pinConfig?.id) {
         await base44.entities.Configuracion.update(pinConfig.id, { valor: nuevoPin });
-        console.log('PIN actualizado');
       } else {
         await base44.entities.Configuracion.create({
           clave: 'pin_seguridad',
           valor: nuevoPin,
           descripcion: 'PIN de seguridad para ediciones'
         });
-        console.log('PIN creado');
       }
     },
     onSuccess: () => {
-      console.log('=== PIN GUARDADO EXITOSAMENTE ===');
       queryClient.invalidateQueries({ queryKey: ['security', 'pin-config'] });
       setPinActual('');
       setNuevoPin('');
@@ -730,18 +716,10 @@ export default function ConfiguracionUnificada() {
                   setEjecutandoCorreccion(tipo);
                   setProgresoSincronizacion('');
                   try {
-                    if (tipo === 'sincronizarSaldos') {
-                      const result = await sincronizarSaldosEntidades(base44, (msg) => setProgresoSincronizacion(msg));
-                      queryClient.invalidateQueries({ queryKey: ['proveedores'] });
-                      queryClient.invalidateQueries({ queryKey: ['clientes'] });
-                      queryClient.invalidateQueries({ queryKey: ['cuentacorriente'] });
-                      toast.success(`Sincronización completada: ${result.proveedoresActualizados} proveedores, ${result.clientesActualizados} clientes.`);
-                    } else {
-                      const onProgress = (tipo === 'correccionSaldosEnvases' || tipo === 'recalcularSaldosDesdeCC' ? (msg) => setProgresoSincronizacion(msg) : undefined);
-                      const result = await ejecutarCorreccionManual(tipo, base44, queryClient, onProgress);
-                      const mensaje = result?.message ?? 'Proceso finalizado correctamente.';
-                      toast.success(mensaje);
-                    }
+                    const onProgress = (tipo === 'correccionSaldosEnvases' || tipo === 'recalcularSaldosDesdeCC' ? (msg) => setProgresoSincronizacion(msg) : undefined);
+                    const result = await ejecutarCorreccionManual(tipo, base44, queryClient, onProgress);
+                    const mensaje = result?.message ?? 'Proceso finalizado correctamente.';
+                    toast.success(mensaje);
                   } catch (error) {
                     console.error(`Error en corrección ${tipo}:`, error);
                     toast.error(`Error al ejecutar: ${error?.message ?? 'Error desconocido'}`);
@@ -763,17 +741,10 @@ export default function ConfiguracionUnificada() {
                 confirmarPin={confirmarPin}
                 setConfirmarPin={setConfirmarPin}
                 onGuardar={() => {
-                  console.log('=== BOTÓN ACTUALIZAR PIN PRESIONADO ===');
-                  console.log('PIN Actual:', pinActual);
-                  console.log('Nuevo PIN:', nuevoPin);
-                  console.log('Confirmar PIN:', confirmarPin);
-                  
                   if (nuevoPin !== confirmarPin) {
                     toast.error('Los PINs no coinciden');
                     return;
                   }
-                  
-                  console.log('Iniciando mutación...');
                   askPin(
                     () => guardarPINMutation.mutate({ pinActual, nuevoPin }),
                     'Confirmar actualización de PIN'

@@ -12,10 +12,14 @@ import { format } from 'date-fns';
 
 const PAGE_SIZE = 500;
 
-/** Normaliza saldo_envases: puede ser objeto, string JSON o null/undefined. */
+/**
+ * Normaliza entidad.saldo_envases para lectura segura.
+ * - Si es string → JSON.parse (si falla, {}).
+ * - Si es null o undefined → {}.
+ * - Si es objeto plano → se devuelve tal cual.
+ */
 function normalizarSaldoEnvases(raw) {
   if (raw == null) return {};
-  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
@@ -24,27 +28,30 @@ function normalizarSaldoEnvases(raw) {
       return {};
     }
   }
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
   return {};
 }
 
-/** True si hay al menos un envase pendiente (cualquier clave con valor distinto de 0). */
-function tieneAlgunPendiente(saldoEnvases) {
-  const obj = normalizarSaldoEnvases(saldoEnvases);
-  return Object.values(obj).some((v) => Number(v) !== 0);
-}
-
-/** True si tiene al menos una clave en saldo_envases (está en el tracking de envases). */
+/** True si tiene al menos una clave (está en el tracking de envases). */
 function tieneTrackingEnvases(saldoEnvases) {
   const obj = normalizarSaldoEnvases(saldoEnvases);
   return Object.keys(obj).length > 0;
 }
 
-/** Convierte saldo_envases a array de { tipo, saldo } con saldo !== 0 (positivo o negativo). */
+/**
+ * Convierte saldo_envases a array de { tipo, saldo }.
+ * Solo incluye líneas con saldo !== 0 (positivo o negativo). Formato inesperado → [].
+ */
 function saldoEnvasesAArray(saldoEnvases) {
-  const obj = normalizarSaldoEnvases(saldoEnvases);
-  return Object.entries(obj)
-    .map(([tipo, saldo]) => ({ tipo, saldo: Number(saldo) || 0 }))
-    .filter((e) => e.saldo !== 0);
+  try {
+    const obj = normalizarSaldoEnvases(saldoEnvases);
+    if (!obj || typeof obj !== 'object') return [];
+    return Object.entries(obj)
+      .map(([tipo, saldo]) => ({ tipo: String(tipo), saldo: Number(saldo) || 0 }))
+      .filter((e) => e.saldo !== 0);
+  } catch {
+    return [];
+  }
 }
 
 export default function SaldosEnvases() {
@@ -109,35 +116,57 @@ export default function SaldosEnvases() {
 
   const todosLosSaldos = useMemo(() => {
     const lista = [];
+    const safeEnvases = (raw) => {
+      try {
+        const arr = saldoEnvasesAArray(raw);
+        return Array.isArray(arr) ? arr : [];
+      } catch {
+        return [];
+      }
+    };
 
-    proveedores.forEach((p) => {
-      if (!tieneTrackingEnvases(p.saldo_envases)) return;
-      const envasesArray = saldoEnvasesAArray(p.saldo_envases);
-      const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
-      lista.push({
-        id: p.id,
-        nombre: p.nombre || 'Desconocido',
-        tipo: 'Proveedor',
-        whatsapp: p.whatsapp,
-        envases: envasesArray,
-        totalAdeudado,
-        historial: [],
-      });
+    (Array.isArray(proveedores) ? proveedores : []).forEach((p) => {
+      try {
+        if (!p || (p.id == null && p.nombre == null)) return;
+        if (!tieneTrackingEnvases(p.saldo_envases)) return;
+        const envasesArray = safeEnvases(p.saldo_envases);
+        const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
+        const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
+        lista.push({
+          id: p.id,
+          nombre: p.nombre || 'Desconocido',
+          tipo: 'Proveedor',
+          whatsapp: p.whatsapp,
+          envases: envasesArray,
+          totalAdeudado,
+          totalAFavor,
+          historial: [],
+        });
+      } catch {
+        // Formato inesperado: omitir entidad sin romper la lista
+      }
     });
 
-    clientes.forEach((c) => {
-      if (!tieneTrackingEnvases(c.saldo_envases)) return;
-      const envasesArray = saldoEnvasesAArray(c.saldo_envases);
-      const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
-      lista.push({
-        id: c.id,
-        nombre: c.nombre || 'Desconocido',
-        tipo: 'Cliente',
-        whatsapp: c.whatsapp,
-        envases: envasesArray,
-        totalAdeudado,
-        historial: [],
-      });
+    (Array.isArray(clientes) ? clientes : []).forEach((c) => {
+      try {
+        if (!c || (c.id == null && c.nombre == null)) return;
+        if (!tieneTrackingEnvases(c.saldo_envases)) return;
+        const envasesArray = safeEnvases(c.saldo_envases);
+        const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
+        const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
+        lista.push({
+          id: c.id,
+          nombre: c.nombre || 'Desconocido',
+          tipo: 'Cliente',
+          whatsapp: c.whatsapp,
+          envases: envasesArray,
+          totalAdeudado,
+          totalAFavor,
+          historial: [],
+        });
+      } catch {
+        // Formato inesperado: omitir entidad sin romper la lista
+      }
     });
 
     return lista.sort((a, b) => b.totalAdeudado - a.totalAdeudado);
@@ -172,19 +201,23 @@ export default function SaldosEnvases() {
           <thead>
             <tr>
               <th>Tipo de Envase</th>
-              <th>Cantidad Adeudada</th>
+              <th>Cantidad</th>
             </tr>
           </thead>
           <tbody>
-            ${(entidad.envases || []).map(e => `
-              <tr>
-                <td>${e.tipo}</td>
-                <td style="color: #dc2626; font-weight: bold;">${e.saldo}</td>
-              </tr>
-            `).join('')}
+            ${(Array.isArray(entidad.envases) ? entidad.envases : []).map((e) => {
+              const saldo = Number(e.saldo);
+              const color = saldo > 0 ? '#dc2626' : saldo < 0 ? '#15803d' : '#64748b';
+              const label = saldo > 0 ? ' (deuda)' : saldo < 0 ? ' (a favor)' : '';
+              return `<tr><td>${e.tipo || '-'}</td><td style="color: ${color}; font-weight: bold;">${e.saldo}${label}</td></tr>`;
+            }).join('')}
             <tr class="total">
-              <td>TOTAL</td>
-              <td>${entidad.totalAdeudado}</td>
+              <td>Deuda total</td>
+              <td>${entidad.totalAdeudado ?? 0}</td>
+            </tr>
+            <tr class="total">
+              <td>A favor total</td>
+              <td>${entidad.totalAFavor ?? 0}</td>
             </tr>
           </tbody>
         </table>
@@ -200,32 +233,33 @@ export default function SaldosEnvases() {
   };
 
   const compartirWhatsAppSaldo = async (entidad) => {
-    if (!entidad.whatsapp) {
+    if (!entidad?.whatsapp) {
       alert('No hay número de WhatsApp registrado para esta entidad');
       return;
     }
-    
-    const mensaje = `🔴 *SALDO DE ENVASES*\n\n` +
+    const envs = Array.isArray(entidad.envases) ? entidad.envases : [];
+    const lineas = envs.map((e) => `• ${e.tipo}: ${e.saldo} ${Number(e.saldo) < 0 ? '(a favor)' : '(deuda)'}`);
+    const mensaje =
+      `📦 *SALDO DE ENVASES*\n\n` +
       `${entidad.tipo}: ${entidad.nombre}\n\n` +
-      `📦 *Envases Adeudados:*\n` +
-      entidad.envases.map(e => `• ${e.tipo}: ${e.saldo} unidades`).join('\n') +
-      `\n\n💼 *Total: ${entidad.totalAdeudado} envases*`;
-    
-    const cleanNumber = entidad.whatsapp.replace(/\D/g, '');
+      (lineas.length ? lineas.join('\n') + '\n\n' : '') +
+      `💼 Deuda: ${entidad.totalAdeudado || 0} | A favor: ${entidad.totalAFavor || 0}`;
+    const cleanNumber = String(entidad.whatsapp).replace(/\D/g, '');
     const whatsappUrl = `https://wa.me/${cleanNumber}?text=${encodeURIComponent(mensaje)}`;
     window.open(whatsappUrl, '_blank');
   };
 
+  // Cualquier entidad con saldo distinto de 0 (positivo o negativo), sin filtrar “solo deudores”
   const saldosFiltrados = useMemo(() => {
-    let conPendiente = todosLosSaldos.filter((s) => s.envases.length > 0);
+    let conSaldo = todosLosSaldos.filter((s) => Array.isArray(s.envases) && s.envases.length > 0);
     if (filtroTipo !== 'Ambos') {
-      conPendiente = conPendiente.filter((s) => s.tipo === filtroTipo);
+      conSaldo = conSaldo.filter((s) => s.tipo === filtroTipo);
     }
-    return conPendiente;
+    return conSaldo;
   }, [todosLosSaldos, filtroTipo]);
 
   const saldosPagados = useMemo(() => {
-    let pagados = todosLosSaldos.filter((s) => s.envases.length === 0);
+    let pagados = todosLosSaldos.filter((s) => !Array.isArray(s.envases) || s.envases.length === 0);
     if (filtroTipo !== 'Ambos') {
       pagados = pagados.filter((s) => s.tipo === filtroTipo);
     }
@@ -357,9 +391,9 @@ export default function SaldosEnvases() {
                   <AlertTriangle className="h-6 w-6 text-red-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500">Proveedores con Deuda</p>
+                  <p className="text-xs text-slate-500">Proveedores con saldo pendiente</p>
                   <p className="text-2xl font-bold text-red-600">{saldosPorProveedor.length}</p>
-                  <p className="text-xs text-slate-400">{totalProveedores} envases totales</p>
+                  <p className="text-xs text-slate-400">{totalProveedores} envases (deuda)</p>
                 </div>
               </div>
             </CardContent>
@@ -374,7 +408,7 @@ export default function SaldosEnvases() {
                 <div>
                   <p className="text-xs text-slate-500">Proveedores</p>
                   <p className="text-2xl font-bold text-blue-600">{totalProveedores}</p>
-                  <p className="text-xs text-slate-500">{saldosPorProveedor.length} con deuda</p>
+                  <p className="text-xs text-slate-500">{saldosPorProveedor.length} con saldo ≠ 0</p>
                 </div>
               </div>
             </CardContent>
@@ -387,9 +421,9 @@ export default function SaldosEnvases() {
                   <User className="h-6 w-6 text-purple-600" />
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500">Clientes (Acopio Debe)</p>
+                  <p className="text-xs text-slate-500">Clientes con saldo pendiente</p>
                   <p className="text-2xl font-bold text-purple-600">{totalClientes}</p>
-                  <p className="text-xs text-slate-500">{saldosPorCliente.length} pendientes</p>
+                  <p className="text-xs text-slate-500">{saldosPorCliente.length} con saldo ≠ 0</p>
                 </div>
               </div>
             </CardContent>
@@ -479,12 +513,12 @@ export default function SaldosEnvases() {
                 <CheckCircle className="h-8 w-8 text-green-600" />
               </div>
               <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                ¡Sin deudas de envases!
+                Sin saldos pendientes
               </h3>
               <p className="text-slate-500">
-                {filtroTipo === 'Ambos' 
-                  ? 'Todos los proveedores y clientes tienen sus envases al día'
-                  : `Todos los ${filtroTipo === 'Proveedor' ? 'proveedores' : 'clientes'} tienen sus envases al día`}
+                {filtroTipo === 'Ambos'
+                  ? 'Ningún proveedor o cliente tiene saldo de envases distinto de 0'
+                  : `Ningún ${filtroTipo === 'Proveedor' ? 'proveedor' : 'cliente'} tiene saldo de envases distinto de 0`}
               </p>
             </CardContent>
           </Card>
@@ -502,38 +536,59 @@ export default function SaldosEnvases() {
                         {entidad.nombre}
                       </CardTitle>
                     </div>
-                    <Badge
-                      variant="destructive"
-                      className="text-base px-3 py-1"
-                    >
-                      {entidad.totalAdeudado > 0
-                        ? `${entidad.totalAdeudado} envases`
-                        : 'Saldo a favor'}
-                    </Badge>
+                    {entidad.totalAdeudado > 0 ? (
+                      <Badge variant="destructive" className="text-base px-3 py-1">
+                        {entidad.totalAdeudado} envases (deuda)
+                      </Badge>
+                    ) : (entidad.totalAFavor || 0) > 0 ? (
+                      <Badge className="text-base px-3 py-1 bg-green-100 text-green-800 border-green-300">
+                        Saldo a favor
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-base px-3 py-1">
+                        Al día
+                      </Badge>
+                    )}
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-wrap gap-3 mb-3">
-                    {entidad.envases.map((env, i) => {
-                      const esDeuda = env.saldo > 0;
+                    {(Array.isArray(entidad.envases) ? entidad.envases : []).map((env, i) => {
+                      const esDeuda = Number(env.saldo) > 0;
+                      const esAFavor = Number(env.saldo) < 0;
                       return (
                         <div
                           key={i}
                           className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${
                             esDeuda
                               ? 'bg-red-50 border-red-200'
-                              : 'bg-slate-50 border-slate-200'
+                              : esAFavor
+                                ? 'bg-green-50 border-green-200'
+                                : 'bg-slate-50 border-slate-200'
                           }`}
                         >
-                          <Package className={`h-4 w-4 ${esDeuda ? 'text-red-500' : 'text-slate-500'}`} />
-                          <span className={`font-medium ${esDeuda ? 'text-red-800' : 'text-slate-700'}`}>
+                          <Package
+                            className={`h-4 w-4 ${
+                              esDeuda ? 'text-red-500' : esAFavor ? 'text-green-600' : 'text-slate-500'
+                            }`}
+                          />
+                          <span
+                            className={`font-medium ${
+                              esDeuda ? 'text-red-800' : esAFavor ? 'text-green-800' : 'text-slate-700'
+                            }`}
+                          >
                             {env.tipo}:
                           </span>
-                          <span className={`font-bold ${esDeuda ? 'text-red-600' : 'text-slate-600'}`}>
+                          <span
+                            className={`font-bold ${
+                              esDeuda ? 'text-red-600' : esAFavor ? 'text-green-700' : 'text-slate-600'
+                            }`}
+                          >
                             {env.saldo}
                           </span>
-                          {!esDeuda && (
-                            <span className="text-xs text-slate-500">(a favor)</span>
+                          {esAFavor && <span className="text-xs text-green-600">(a favor)</span>}
+                          {!esDeuda && !esAFavor && (
+                            <span className="text-xs text-slate-500">(al día)</span>
                           )}
                         </div>
                       );
@@ -596,16 +651,16 @@ export default function SaldosEnvases() {
                         {entidad.nombre}
                       </CardTitle>
                     </div>
-                    <Badge className="bg-green-100 text-green-700 border-green-300 text-base px-3 py-1">
-                      ✓ Al día
+                    <Badge variant="secondary" className="text-base px-3 py-1 bg-slate-100 text-slate-700 border-slate-300">
+                      Saldo 0 · Al día
                     </Badge>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-2 px-4 py-3 bg-green-50 border border-green-200 rounded-lg mb-3">
-                    <CheckCircle className="h-5 w-5 text-green-600" />
-                    <span className="text-sm text-green-800 font-medium">
-                      Todos los envases han sido devueltos
+                  <div className="flex items-center gap-2 px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg mb-3">
+                    <CheckCircle className="h-5 w-5 text-slate-500" />
+                    <span className="text-sm text-slate-700 font-medium">
+                      Saldo en cero (tuvo movimientos, actualmente al día)
                     </span>
                   </div>
 

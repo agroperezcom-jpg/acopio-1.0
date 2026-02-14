@@ -1,8 +1,184 @@
 import { correccionRetroactivaEnvases } from '@/components/utils/correccionRetroactivaEnvases';
 import { listAll } from '@/utils/listAllPaginado';
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
-const DELAY_PER_OPERATION_MS = 500; // Extremadamente conservador: 1 operación cada 500ms para evitar 429
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+const DELAY_PER_OPERATION_MS = 500;
+const FETCH_PAGE_SIZE = 100;
+const DELAY_BETWEEN_PAGES_MS = 250;
+
+/**
+ * Descarga todos los registros de una entidad paginando de a FETCH_PAGE_SIZE para evitar 429.
+ * @param {Object} entity - base44.entities.X
+ * @param {string} order - ej: '-created_date'
+ * @returns {Promise<Array>}
+ */
+async function fetchAll(entity, order = '-created_date') {
+  const all = [];
+  let skip = 0;
+  while (true) {
+    const batch = await entity.list(order, FETCH_PAGE_SIZE, skip);
+    if (!batch || batch.length === 0) break;
+    all.push(...batch);
+    if (batch.length < FETCH_PAGE_SIZE) break;
+    skip += batch.length;
+    await delay(DELAY_BETWEEN_PAGES_MS);
+  }
+  return all;
+}
+
+/**
+ * Arqueo de saldos de envases: procesa TODO el historial (Movimiento con Mov. Envases + Ingreso Fruta con envases, SalidaFruta con envases)
+ * y actualiza saldo_envases en cada Proveedor y Cliente.
+ * - Movimiento de Envases: Salida (entregamos vacíos) → saldo += cantidad; Ingreso (nos devuelven) → saldo -= cantidad.
+ * - Ingreso Fruta (proveedor trae envases_llenos): saldo[proveedor] -= cantidad.
+ * - Salida Fruta (cliente se lleva envases_llenos): saldo[cliente] += cantidad.
+ */
+async function correccionSaldosEnvases(base44, queryClient, onProgress) {
+  const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
+
+  report('Recalculando stock físico (ocupados/vacíos)...');
+  const resultadoStock = await correccionRetroactivaEnvases(base44);
+  const envasesCorregidos = resultadoStock?.corregidos ?? 0;
+  await delay(DELAY_PER_OPERATION_MS);
+
+  report('Descargando Proveedores, Clientes y Envases...');
+  const [proveedores, clientes, envases] = await Promise.all([
+    listAll(base44.entities.Proveedor, 'nombre'),
+    listAll(base44.entities.Cliente, 'nombre'),
+    listAll(base44.entities.Envase, 'tipo'),
+  ]);
+  await delay(DELAY_PER_OPERATION_MS);
+
+  const envaseIdToTipo = {};
+  envases.forEach((e) => { if (e.id != null && e.tipo) envaseIdToTipo[String(e.id)] = e.tipo; });
+
+  report('Descargando Movimientos (paginado 100)...');
+  const movimientos = await fetchAll(base44.entities.Movimiento, '-created_date');
+  await delay(DELAY_BETWEEN_PAGES_MS);
+
+  report('Descargando Salidas de Fruta (paginado 100)...');
+  const salidas = await fetchAll(base44.entities.SalidaFruta, '-created_date');
+  await delay(DELAY_BETWEEN_PAGES_MS);
+
+  const saldos = {};
+  const norm = (id) => (id == null ? '' : String(id));
+
+  function addSaldo(entidadTipo, entidadId, tipoEnvase, delta) {
+    const id = norm(entidadId);
+    if (!id || !tipoEnvase) return;
+    const key = `${entidadTipo}-${id}`;
+    if (!saldos[key]) saldos[key] = {};
+    const prev = Number(saldos[key][tipoEnvase]) || 0;
+    saldos[key][tipoEnvase] = prev + Number(delta);
+  }
+
+  function getTipoEnvase(e, envaseIdToTipo) {
+    return e.envase_tipo || (e.envase_id != null && envaseIdToTipo[String(e.envase_id)]) || null;
+  }
+
+  // ─── Movimiento de Envases ───
+  for (const mov of movimientos) {
+    if (mov.tipo_movimiento !== 'Movimiento de Envases' || !mov.movimiento_envases?.length) continue;
+    for (const me of mov.movimiento_envases) {
+      const tipo = getTipoEnvase(me, envaseIdToTipo);
+      if (!tipo) continue;
+      const ing = Number(me.cantidad_ingreso) || 0;
+      const sal = Number(me.cantidad_salida) || 0;
+      if (mov.proveedor_id) addSaldo('Proveedor', mov.proveedor_id, tipo, sal - ing);
+      if (mov.cliente_id) addSaldo('Cliente', mov.cliente_id, tipo, ing - sal);
+    }
+  }
+
+  // ─── Ingreso de Fruta (solo con envases): proveedor devuelve envases → saldo -= cantidad ───
+  for (const mov of movimientos) {
+    if (mov.tipo_movimiento !== 'Ingreso de Fruta' || !mov.proveedor_id) continue;
+    if (mov.envases_llenos?.length) {
+      for (const e of mov.envases_llenos) {
+        const tipo = getTipoEnvase(e, envaseIdToTipo);
+        const cantidad = Number(e.cantidad) ?? Number(e.cantidad_ingreso) ?? 0;
+        if (tipo && cantidad !== 0) addSaldo('Proveedor', mov.proveedor_id, tipo, -cantidad);
+      }
+    } else if (mov.pesajes?.length) {
+      const porTipo = {};
+      for (const p of mov.pesajes) {
+        if (p.envase_id != null || p.envase_tipo) {
+          const tipo = p.envase_tipo || envaseIdToTipo[String(p.envase_id)];
+          if (tipo) porTipo[tipo] = (porTipo[tipo] || 0) + (Number(p.cantidad) || 1);
+        }
+      }
+      for (const [tipo, cantidad] of Object.entries(porTipo)) {
+        addSaldo('Proveedor', mov.proveedor_id, tipo, -cantidad);
+      }
+    }
+  }
+
+  // ─── Salida Fruta (solo con envases): cliente se lleva envases → saldo += cantidad ───
+  for (const salida of salidas) {
+    if (!salida.cliente_id || !salida.envases_llenos?.length) continue;
+    for (const e of salida.envases_llenos) {
+      const tipo = getTipoEnvase(e, envaseIdToTipo);
+      const cantidad = Number(e.cantidad) ?? Number(e.cantidad_ingreso) ?? 0;
+      if (tipo && cantidad !== 0) addSaldo('Cliente', salida.cliente_id, tipo, cantidad);
+    }
+  }
+
+  function saldoLimpio(objeto) {
+    if (!objeto || typeof objeto !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(objeto)
+        .filter(([, v]) => Number(v) !== 0)
+        .map(([k, v]) => [k, Number(v)])
+    );
+  }
+
+  let actualizados = 0;
+  const totalProveedores = proveedores.length;
+  const totalClientes = clientes.length;
+
+  for (let i = 0; i < proveedores.length; i++) {
+    const p = proveedores[i];
+    const key = `Proveedor-${norm(p.id)}`;
+    const raw = saldos[key];
+    const saldoEnvases = saldoLimpio(raw);
+    try {
+      await base44.entities.Proveedor.update(p.id, { saldo_envases: saldoEnvases });
+      actualizados++;
+    } catch (err) {
+      console.warn(`correccionSaldosEnvases: error actualizando Proveedor ${p.id}:`, err?.message || err);
+    }
+    report(`Proveedores: ${i + 1}/${totalProveedores}`);
+    await delay(DELAY_PER_OPERATION_MS);
+  }
+
+  for (let i = 0; i < clientes.length; i++) {
+    const c = clientes[i];
+    const key = `Cliente-${norm(c.id)}`;
+    const raw = saldos[key];
+    const saldoEnvases = saldoLimpio(raw);
+    try {
+      await base44.entities.Cliente.update(c.id, { saldo_envases: saldoEnvases });
+      actualizados++;
+    } catch (err) {
+      console.warn(`correccionSaldosEnvases: error actualizando Cliente ${c.id}:`, err?.message || err);
+    }
+    report(`Clientes: ${i + 1}/${totalClientes}`);
+    await delay(DELAY_PER_OPERATION_MS);
+  }
+
+  queryClient.invalidateQueries({ queryKey: ['proveedores'] });
+  queryClient.invalidateQueries({ queryKey: ['clientes'] });
+  queryClient.invalidateQueries({ queryKey: ['proveedores-saldosenvases'] });
+  queryClient.invalidateQueries({ queryKey: ['clientes-saldosenvases'] });
+  queryClient.invalidateQueries({ queryKey: ['envases'] });
+
+  return {
+    actualizados,
+    totalProveedores,
+    totalClientes,
+    envasesCorregidos,
+    message: `Recalcular envases: ${envasesCorregidos} tipos de envase (stock físico) y ${actualizados} entidades (saldos de deuda).`,
+  };
+}
 
 // Función para ejecutar correcciones manualmente
 export async function ejecutarCorreccionManual(tipo, base44, queryClient, onProgress) {
@@ -21,136 +197,8 @@ export async function ejecutarCorreccionManual(tipo, base44, queryClient, onProg
   resetFlags();
 
   switch(tipo) {
-    case 'correccionSaldosEnvases': {
-      const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
-
-      // 1. Recalcular stock físico (ocupados/vacíos) con la misma lógica que Corrección Retroactiva
-      report('Recalculando stock físico (ocupados/vacíos)...');
-      const resultadoStock = await correccionRetroactivaEnvases(base44);
-      const envasesCorregidos = resultadoStock?.corregidos ?? 0;
-
-      report('Descargando proveedores y clientes...');
-      const [proveedores, clientes, envases] = await Promise.all([
-        listAll(base44.entities.Proveedor, 'nombre'),
-        listAll(base44.entities.Cliente, 'nombre'),
-        listAll(base44.entities.Envase, 'tipo')
-      ]);
-      await delay(DELAY_PER_OPERATION_MS);
-
-      const envaseIdToTipo = {};
-      envases.forEach(e => { if (e.id && e.tipo) envaseIdToTipo[e.id] = e.tipo; });
-
-      report('Descargando movimientos (por lotes)...');
-      const movimientos = await listAll(base44.entities.Movimiento, '-created_date');
-      await delay(DELAY_PER_OPERATION_MS);
-
-      report('Descargando salidas de fruta (por lotes)...');
-      const salidas = await listAll(base44.entities.SalidaFruta, '-created_date');
-
-      const saldosPorEntidad = {};
-
-      function addSaldo(entidadTipo, entidadId, tipoEnvase, delta) {
-        if (!entidadId || !tipoEnvase) return;
-        const key = `${entidadTipo}-${entidadId}`;
-        if (!saldosPorEntidad[key]) saldosPorEntidad[key] = {};
-        const actual = Number(saldosPorEntidad[key][tipoEnvase]) || 0;
-        saldosPorEntidad[key][tipoEnvase] = actual + Number(delta);
-      }
-
-      for (const mov of movimientos) {
-        if (mov.tipo_movimiento === 'Ingreso de Fruta' && mov.proveedor_id) {
-          if (mov.envases_llenos?.length) {
-            for (const e of mov.envases_llenos) {
-              const tipo = e.envase_tipo;
-              if (tipo && (e.cantidad || 0) !== 0) addSaldo('Proveedor', mov.proveedor_id, tipo, -(e.cantidad || 0));
-            }
-          } else if (mov.pesajes?.length) {
-            const porEnvase = {};
-            for (const p of mov.pesajes) {
-              if (p.envase_id) {
-                const tipo = envaseIdToTipo[p.envase_id] || p.envase_tipo;
-                if (tipo) {
-                  porEnvase[tipo] = (porEnvase[tipo] || 0) + (p.cantidad || 1);
-                }
-              }
-            }
-            for (const [tipo, cantidad] of Object.entries(porEnvase)) {
-              addSaldo('Proveedor', mov.proveedor_id, tipo, -cantidad);
-            }
-          }
-        }
-        // Misma fórmula que MovimientoEnvases.jsx: Proveedor delta = salida - ingreso, Cliente delta = ingreso - salida
-        if (mov.tipo_movimiento === 'Movimiento de Envases' && mov.movimiento_envases?.length) {
-          for (const e of mov.movimiento_envases) {
-            const tipo = e.envase_tipo || (e.envase_id && envaseIdToTipo[e.envase_id]);
-            if (!tipo) continue;
-            const ing = Number(e.cantidad_ingreso) || 0;
-            const sal = Number(e.cantidad_salida) || 0;
-            if (mov.proveedor_id) addSaldo('Proveedor', mov.proveedor_id, tipo, sal - ing);
-            if (mov.cliente_id) addSaldo('Cliente', mov.cliente_id, tipo, ing - sal);
-          }
-        }
-      }
-
-      for (const salida of salidas) {
-        if (!salida.cliente_id || !salida.envases_llenos?.length) continue;
-        for (const e of salida.envases_llenos) {
-          const tipo = e.envase_tipo || (e.envase_id && envaseIdToTipo[e.envase_id]);
-          if (tipo && (e.cantidad || 0) !== 0) addSaldo('Cliente', salida.cliente_id, tipo, -(e.cantidad || 0));
-        }
-      }
-
-      let actualizados = 0;
-      const totalProveedores = proveedores.length;
-      const totalClientes = clientes.length;
-
-      for (let i = 0; i < proveedores.length; i++) {
-        const p = proveedores[i];
-        const key = `Proveedor-${p.id}`;
-        const saldo = saldosPorEntidad[key];
-        const saldoEnvases = saldo ? Object.fromEntries(
-          Object.entries(saldo).map(([t, v]) => [t, Math.max(0, Number(v))]).filter(([, v]) => v !== 0)
-        ) : {};
-        try {
-          await base44.entities.Proveedor.update(p.id, { saldo_envases: saldoEnvases });
-          actualizados++;
-        } catch (err) {
-          console.warn(`correccionSaldosEnvases: error actualizando Proveedor ${p.id}:`, err?.message || err);
-        }
-        report(`Proveedores: ${i + 1}/${totalProveedores}`);
-        await delay(DELAY_PER_OPERATION_MS);
-      }
-
-      for (let i = 0; i < clientes.length; i++) {
-        const c = clientes[i];
-        const key = `Cliente-${c.id}`;
-        const saldo = saldosPorEntidad[key];
-        const saldoEnvases = saldo ? Object.fromEntries(
-          Object.entries(saldo).map(([t, v]) => [t, Math.max(0, Number(v))]).filter(([, v]) => v !== 0)
-        ) : {};
-        try {
-          await base44.entities.Cliente.update(c.id, { saldo_envases: saldoEnvases });
-          actualizados++;
-        } catch (err) {
-          console.warn(`correccionSaldosEnvases: error actualizando Cliente ${c.id}:`, err?.message || err);
-        }
-        report(`Clientes: ${i + 1}/${totalClientes}`);
-        await delay(DELAY_PER_OPERATION_MS);
-      }
-
-      queryClient.invalidateQueries({ queryKey: ['proveedores'] });
-      queryClient.invalidateQueries({ queryKey: ['clientes'] });
-      queryClient.invalidateQueries({ queryKey: ['proveedores-saldosenvases'] });
-      queryClient.invalidateQueries({ queryKey: ['clientes-saldosenvases'] });
-      queryClient.invalidateQueries({ queryKey: ['envases'] });
-      return {
-        actualizados,
-        totalProveedores,
-        totalClientes,
-        envasesCorregidos,
-        message: `Recalcular envases: ${envasesCorregidos} tipos de envase (stock físico) y ${actualizados} entidades (saldos de deuda).`
-      };
-    }
+    case 'correccionSaldosEnvases':
+      return correccionSaldosEnvases(base44, queryClient, onProgress);
     case 'recalcularSaldosDesdeCC': {
       // Reparación masiva: saldo_actual = suma de CuentaCorriente (Haber suma, Debe resta). Solo confía en monto guardado.
       const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { format, startOfDay, endOfDay, subDays, startOfMonth, endOfMonth, subMonths, startOfYear } from 'date-fns';
+import { format, startOfDay, endOfDay, subDays, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
@@ -8,8 +8,6 @@ const PRESETS = {
   ayer: 'ayer',
   esteMes: 'esteMes',
   mesPasado: 'mesPasado',
-  ultimos3Meses: 'ultimos3Meses',
-  esteAnio: 'esteAnio',
   personalizado: 'personalizado'
 };
 
@@ -30,10 +28,6 @@ function getRangeForPreset(preset) {
       const mesPasado = subMonths(hoy, 1);
       return { desde: startOfMonth(mesPasado), hasta: endOfMonth(mesPasado) };
     }
-    case PRESETS.ultimos3Meses:
-      return { desde: subDays(hoy, 90), hasta: endOfDay(hoy) };
-    case PRESETS.esteAnio:
-      return { desde: startOfYear(hoy), hasta: endOfDay(hoy) };
     default:
       return null;
   }
@@ -78,6 +72,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
     }
   };
 
+  // Al tocar fechas manuales: dropdown → Personalizado; solo actualizamos 'desde', 'hasta' se mantiene
   const handleDesdeChange = (e) => {
     const value = e.target.value;
     setDesde(value);
@@ -89,6 +84,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
     }
   };
 
+  // Solo actualizamos 'hasta', 'desde' se mantiene
   const handleHastaChange = (e) => {
     const value = e.target.value;
     setHasta(value);
@@ -100,20 +96,20 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
     }
   };
 
+  const barraClase = 'h-10 box-border rounded-md border border-gray-300 bg-white px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+
   return (
-    <div className={cn('flex flex-wrap items-center gap-4', className)}>
+    <div className={cn('flex flex-wrap items-center gap-2', className)}>
       <select
         value={preset}
         onChange={handlePresetChange}
-        className="h-10 min-w-[140px] rounded-md border border-input bg-white px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className={cn(barraClase, 'min-w-[140px] cursor-pointer')}
         aria-label="Preset de rango"
       >
         <option value={PRESETS.hoy}>Hoy</option>
         <option value={PRESETS.ayer}>Ayer</option>
         <option value={PRESETS.esteMes}>Este Mes</option>
         <option value={PRESETS.mesPasado}>Mes Pasado</option>
-        <option value={PRESETS.ultimos3Meses}>Últimos 3 Meses</option>
-        <option value={PRESETS.esteAnio}>Este Año</option>
         <option value={PRESETS.personalizado}>Personalizado</option>
       </select>
 
@@ -123,7 +119,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
         value={desde}
         onChange={handleDesdeChange}
         max={hasta || undefined}
-        className="h-10 w-[140px] shrink-0 text-sm"
+        className={cn(barraClase, 'w-[140px] shrink-0 [&::-webkit-calendar-picker-indicator]:opacity-70')}
         aria-label="Fecha desde"
       />
       <span className="text-slate-400 text-sm font-medium shrink-0" aria-hidden="true">—</span>
@@ -133,7 +129,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
         value={hasta}
         onChange={handleHastaChange}
         min={desde || undefined}
-        className="h-10 w-[140px] shrink-0 text-sm"
+        className={cn(barraClase, 'w-[140px] shrink-0 [&::-webkit-calendar-picker-indicator]:opacity-70')}
         aria-label="Fecha hasta"
       />
     </div>

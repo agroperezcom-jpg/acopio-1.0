@@ -1,27 +1,25 @@
 import React, { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Loader2, Apple, Truck, Scale, Package, Trash2 } from "lucide-react";
 import { format } from 'date-fns';
+import { Plus, Loader2, Apple, Truck, Scale, Package, Trash2 } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import AsyncSelect from '@/components/AsyncSelect';
-import QuickCreateModal from '@/components/QuickCreateModal';
-import PesajeLineItem from '@/components/PesajeLineItem';
+import ConfirmPesajeModal from '@/components/ConfirmPesajeModal';
 import EnvaseLineItemLlenos from '@/components/EnvaseLineItemLlenos';
 import GenericSuccessModal from '@/components/GenericSuccessModal';
-import ConfirmPesajeModal from '@/components/ConfirmPesajeModal';
+import PesajeLineItem from '@/components/PesajeLineItem';
+import QuickCreateModal from '@/components/QuickCreateModal';
 import { descargarPDFIngresoFruta, compartirWhatsAppIngresoFruta } from '@/components/PDFGeneratorIngresoFruta';
 import { agruparKilosPorProducto } from '@/components/utils/precisionDecimal';
-import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 import { actualizarSaldoEntidad } from '@/utils/contabilidad';
+import { invalidarTodoElSistema } from '@/utils/queryHelpers';
+import { registrarMovimientoEnvase } from '@/services/SaldoEnvasesService';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
-import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function IngresoFruta({ embedded = false }) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   
   const [fecha, setFecha] = useState(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
@@ -208,6 +206,8 @@ export default function IngresoFruta({ embedded = false }) {
         deudaTotalIngreso += p.peso_neto * precioCompra;
       });
 
+      const envasesLlenosFiltrados = envasesLlenos.filter(e => e.cantidad > 0);
+
       const movimiento = {
         fecha: new Date(fecha).toISOString(),
         tipo_movimiento: 'Ingreso de Fruta',
@@ -219,29 +219,30 @@ export default function IngresoFruta({ embedded = false }) {
         monto_pagado: 0,
         deuda_total: deudaTotalIngreso,
         pesajes: pesajes.filter(p => p.peso_bruto > 0),
-        envases_llenos: envasesLlenos.filter(e => e.cantidad > 0)
+        envases_llenos: envasesLlenosFiltrados
       };
 
       const created = await base44.entities.Movimiento.create(movimiento);
-      
+
       // Actualizar stock vivo de productos (incremental por servicio)
       const stockPorProducto = agruparKilosPorProducto(pesajes, 'peso_neto');
       for (const [productoId, totalNeto] of Object.entries(stockPorProducto)) {
         await ajustarStockProducto(base44, productoId, totalNeto);
       }
 
-      // Actualizar stock vivo de envases ocupados
+      // Stock físico: aumentar envases ocupados en depósito
       for (const envLleno of movimiento.envases_llenos || []) {
         if (envLleno.cantidad > 0 && envLleno.envase_id) {
           await ajustarStockEnvase(base44, envLleno.envase_id, envLleno.cantidad, 0);
         }
       }
 
-      // Actualizar saldo vivo de envases (proveedor devuelve llenos = reduce deuda)
-      for (const envLleno of movimiento.envases_llenos || []) {
-        if (envLleno.cantidad > 0 && envLleno.envase_tipo && proveedorId) {
-          await actualizarDeudaEnvase(base44, 'Proveedor', proveedorId, envLleno.envase_tipo, -envLleno.cantidad);
-        }
+      // Saldo de envases: proveedor devuelve llenos → RECEPCION (disminuye deuda)
+      const itemsRecepcion = envasesLlenosFiltrados
+        .filter(e => e.cantidad > 0 && e.envase_tipo)
+        .map(e => ({ tipo_envase: e.envase_tipo, cantidad: e.cantidad }));
+      if (itemsRecepcion.length > 0) {
+        await registrarMovimientoEnvase('Proveedor', proveedorId, itemsRecepcion, 'RECEPCION');
       }
       
       // ═══════════════════════════════════════════════════════════════
@@ -277,6 +278,9 @@ export default function IngresoFruta({ embedded = false }) {
         open: true, 
         data: { ...movimiento, id: created.id }
       });
+    } catch (err) {
+      const msg = err?.message || 'Error al registrar el ingreso';
+      alert(`Error: ${msg}`);
     } finally {
       setIsSubmitting(false);
     }

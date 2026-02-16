@@ -1,12 +1,9 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { startOfMonth, endOfDay } from 'date-fns';
+import { startOfMonth, endOfMonth } from 'date-fns';
 import { toast } from 'sonner';
-import { History, Search, ChevronDown, ChevronLeft, Filter, ChevronRight, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { History, Search, ChevronLeft, Filter, ChevronRight, Loader2 } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,29 +14,26 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { base44 } from '@/api/base44Client';
-import { invalidarTodoElSistema } from '@/utils/queryHelpers';
-import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
-import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
-import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
-import { usePinGuard } from '@/hooks/usePinGuard';
+import MonthNavigator from '@/components/MonthNavigator';
+import EditarMovimientoModal from '@/components/EditarMovimientoModal';
+import TarjetaMovimiento from '@/components/TarjetaMovimiento';
 import { generateMovimientoPDF, downloadPDF, shareWhatsApp } from '@/components/PDFGenerator';
 import { generateSalidaPDF, downloadSalidaPDF, shareSalidaWhatsApp } from '@/components/SalidaPDFGenerator';
-import { descargarPDFMovimientoEnvases, compartirWhatsAppMovimientoEnvases } from '@/components/MovimientoEnvasesPDFGenerator';
-import EditarMovimientoModal from '@/components/EditarMovimientoModal';
-import DateRangeSelector from '@/components/DateRangeSelector';
-import TarjetaMovimiento from '@/components/TarjetaMovimiento';
+import { usePinGuard } from '@/hooks/usePinGuard';
+import { revertirMovimientoEnvase } from '@/services/SaldoEnvasesService';
+import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
+import { recalcularSaldosEntidad, actualizarSaldoEntidad } from '@/utils/contabilidad';
+import { invalidarTodoElSistema } from '@/utils/queryHelpers';
 
 export default function Historial() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState('todos');
-  const [rangoFechas, setRangoFechas] = useState(() => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
-  });
+  const [fechaVisual, setFechaVisual] = useState(new Date());
   const [expandedId, setExpandedId] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, id: null, tipo: null, registro: null });
   const [isDeleting, setIsDeleting] = useState(false);
@@ -48,8 +42,10 @@ export default function Historial() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [pagina, setPagina] = useState(1);
   const { askPin, PinGuardModal } = usePinGuard();
-  
-  const PAGE_SIZE = 20;
+
+  // Paginación real: servidor entrega de a 50 para evitar 429 en meses con miles de registros
+  const PAGE_SIZE = 50;
+  const skip = (pagina - 1) * PAGE_SIZE;
 
   // Filtro servidor: por tipo de movimiento (evita traer todos y filtrar en cliente)
   const queryMovimientos = useMemo(() => {
@@ -59,17 +55,15 @@ export default function Historial() {
     return {};
   }, [tipoFilter]);
 
-  const fechaDesde = rangoFechas?.desde;
-  const fechaHasta = rangoFechas?.hasta;
+  const fechaDesde = startOfMonth(fechaVisual);
+  const fechaHasta = endOfMonth(fechaVisual);
   const fechaDesdeStr = fechaDesde?.toISOString?.();
   const fechaHastaStr = fechaHasta?.toISOString?.();
-
-  const skip = (pagina - 1) * PAGE_SIZE;
 
   // Reset página cuando cambian los filtros
   useEffect(() => {
     setPagina(1);
-  }, [fechaDesdeStr, fechaHastaStr, tipoFilter, search]);
+  }, [fechaVisual, tipoFilter, search]);
 
   const {
     data: movimientos = [],
@@ -118,6 +112,7 @@ export default function Historial() {
     placeholderData: (previousData) => previousData
   });
 
+  // Si alguna query devolvió menos de PAGE_SIZE, no hay más páginas en esa fuente
   const hasMoreMovimientos = movimientos?.length === PAGE_SIZE;
   const hasMoreSalidas = salidas?.length === PAGE_SIZE;
   const hasMore = hasMoreMovimientos || hasMoreSalidas;
@@ -302,22 +297,38 @@ export default function Historial() {
           }
         }
 
-        // Revertir saldo vivo de envases (deuda)
-        if (registro.envases_llenos?.length && registro.proveedor_id) {
-          for (const e of registro.envases_llenos) {
-            if (e.envase_tipo && (e.cantidad || 0) !== 0) {
-              await actualizarDeudaEnvase(base44, 'Proveedor', registro.proveedor_id, e.envase_tipo, e.cantidad || 0);
-            }
+        // Revertir saldo vivo de envases (deuda) vía SaldoEnvasesService.revertirMovimientoEnvase
+        const getTipoEnvase = (e) => e.envase_tipo || envases.find(x => x.id === e.envase_id)?.tipo;
+
+        // Ingreso de Fruta: envases_llenos → original RECEPCION (proveedor devolvió) → revertir suma deuda
+        if (registro.tipo_movimiento === 'Ingreso de Fruta' && registro.envases_llenos?.length && registro.proveedor_id) {
+          const items = registro.envases_llenos
+            .filter(e => getTipoEnvase(e) && (e.cantidad || 0) > 0)
+            .map(e => ({ tipo_envase: getTipoEnvase(e), cantidad: e.cantidad || 0 }));
+          if (items.length > 0) {
+            await revertirMovimientoEnvase('Proveedor', registro.proveedor_id, items, 'RECEPCION');
           }
         }
-        if (registro.movimiento_envases?.length) {
-          for (const e of registro.movimiento_envases) {
-            const tipo = e.envase_tipo;
-            if (!tipo) continue;
-            const ing = (e.cantidad_ingreso || 0);
-            const sal = (e.cantidad_salida || 0);
-            if (registro.proveedor_id) await actualizarDeudaEnvase(base44, 'Proveedor', registro.proveedor_id, tipo, ing - sal);
-            if (registro.cliente_id) await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, tipo, sal - ing);
+
+        // Movimiento de Envases: salida=ENTREGA, ingreso=RECEPCION
+        if (registro.tipo_movimiento === 'Movimiento de Envases' && registro.movimiento_envases?.length) {
+          const itemsEntrega = [];
+          const itemsRecepcion = [];
+          registro.movimiento_envases.forEach(e => {
+            const tipo = getTipoEnvase(e);
+            if (!tipo) return;
+            const sal = e.cantidad_salida || 0;
+            const ing = e.cantidad_ingreso || 0;
+            if (sal > 0) itemsEntrega.push({ tipo_envase: tipo, cantidad: sal });
+            if (ing > 0) itemsRecepcion.push({ tipo_envase: tipo, cantidad: ing });
+          });
+          if (itemsEntrega.length > 0) {
+            if (registro.proveedor_id) await revertirMovimientoEnvase('Proveedor', registro.proveedor_id, itemsEntrega, 'ENTREGA');
+            if (registro.cliente_id) await revertirMovimientoEnvase('Cliente', registro.cliente_id, itemsEntrega, 'ENTREGA');
+          }
+          if (itemsRecepcion.length > 0) {
+            if (registro.proveedor_id) await revertirMovimientoEnvase('Proveedor', registro.proveedor_id, itemsRecepcion, 'RECEPCION');
+            if (registro.cliente_id) await revertirMovimientoEnvase('Cliente', registro.cliente_id, itemsRecepcion, 'RECEPCION');
           }
         }
 
@@ -344,7 +355,7 @@ export default function Historial() {
           await recalcularSaldosEntidad(base44, registro.cliente_id, 'Cliente');
         }
         
-        // Invalidar todas las queries del sistema
+        // Invalidar queries para que la lista del mes actual (movimientos/salidas) se refresque
         invalidarTodoElSistema(queryClient);
 
         // Verificación: si la entidad quedó sin movimientos, ofrecer eliminar la ficha (dato de prueba)
@@ -427,20 +438,30 @@ export default function Historial() {
           }
         }
 
-        // Revertir saldo vivo de envases (deuda) de la salida
+        // Revertir saldo vivo de envases: Salida → original ENTREGA (cliente se llevó) → revertir resta deuda
+        const getTipoSalida = (e) => e.envase_tipo || envases.find(x => x.id === e.envase_id)?.tipo;
+
         if (registro.envases_llenos?.length && registro.cliente_id) {
-          for (const e of registro.envases_llenos) {
-            if (e.envase_tipo && (e.cantidad || 0) !== 0) {
-              await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, e.envase_tipo, e.cantidad || 0);
-            }
+          const items = registro.envases_llenos
+            .filter(e => getTipoSalida(e) && (e.cantidad || 0) > 0)
+            .map(e => ({ tipo_envase: getTipoSalida(e), cantidad: e.cantidad || 0 }));
+          if (items.length > 0) {
+            await revertirMovimientoEnvase('Cliente', registro.cliente_id, items, 'ENTREGA');
           }
         }
         if (registro.movimiento_envases?.length && registro.cliente_id) {
-          for (const e of registro.movimiento_envases) {
-            if (!e.envase_tipo) continue;
-            const delta = (e.cantidad_salida || 0) - (e.cantidad_ingreso || 0);
-            if (delta !== 0) await actualizarDeudaEnvase(base44, 'Cliente', registro.cliente_id, e.envase_tipo, delta);
-          }
+          const itemsEntrega = [];
+          const itemsRecepcion = [];
+          registro.movimiento_envases.forEach(e => {
+            const tipo = getTipoSalida(e);
+            if (!tipo) return;
+            const sal = e.cantidad_salida || 0;
+            const ing = e.cantidad_ingreso || 0;
+            if (sal > 0) itemsEntrega.push({ tipo_envase: tipo, cantidad: sal });
+            if (ing > 0) itemsRecepcion.push({ tipo_envase: tipo, cantidad: ing });
+          });
+          if (itemsEntrega.length > 0) await revertirMovimientoEnvase('Cliente', registro.cliente_id, itemsEntrega, 'ENTREGA');
+          if (itemsRecepcion.length > 0) await revertirMovimientoEnvase('Cliente', registro.cliente_id, itemsRecepcion, 'RECEPCION');
         }
 
         // Eliminar CuentaCorriente asociados (evitar datos huérfanos) y revertir saldo_actual
@@ -463,7 +484,7 @@ export default function Historial() {
           await recalcularSaldosEntidad(base44, registro.cliente_id, 'Cliente');
         }
         
-        // Invalidar todas las queries del sistema
+        // Invalidar queries para que la lista del mes actual se refresque
         invalidarTodoElSistema(queryClient);
 
         // Verificación: si el cliente quedó sin salidas, ofrecer eliminar su ficha (dato de prueba)
@@ -737,12 +758,12 @@ export default function Historial() {
                 </Select>
               </div>
             </div>
-            <DateRangeSelector
-              startDate={rangoFechas.desde}
-              endDate={rangoFechas.hasta}
-              onChange={({ start, end }) => setRangoFechas({ desde: start, hasta: end })}
-              className="border-t border-slate-100 pt-4"
-            />
+            <div className="border-t border-slate-100 pt-4">
+              <MonthNavigator
+                currentDate={fechaVisual}
+                onMonthChange={setFechaVisual}
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -769,15 +790,16 @@ export default function Historial() {
             ))
           )}
 
-          {/* Barra de Paginación */}
+          {/* Paginación real: [Anterior] Página X [Siguiente]; Siguiente deshabilitado si la query devolvió menos de PAGE_SIZE */}
           {!isLoading && filteredMovimientos.length > 0 && (
-            <div className="mt-6 flex items-center justify-center gap-4 py-4 px-4 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="mt-6 flex items-center justify-center gap-4 py-4 px-4 rounded-lg bg-slate-50 border border-slate-100" role="navigation" aria-label="Paginación del historial">
               <Button
                 variant="outline"
                 size="sm"
                 disabled={pagina <= 1 || loadingMore}
                 onClick={() => setPagina(p => Math.max(1, p - 1))}
                 className="gap-1.5 min-w-[100px]"
+                aria-label="Página anterior"
               >
                 <ChevronLeft className="h-4 w-4" />
                 Anterior
@@ -792,6 +814,7 @@ export default function Historial() {
                 disabled={!hasMore || loadingMore}
                 onClick={() => setPagina(p => p + 1)}
                 className="gap-1.5 min-w-[100px]"
+                aria-label="Página siguiente"
               >
                 Siguiente
                 <ChevronRight className="h-4 w-4" />

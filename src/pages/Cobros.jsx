@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { Receipt, Plus, Loader2, Calendar, Users, DollarSign, FileText, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import DateRangeSelector from '@/components/DateRangeSelector';
 import CobroConSalidasModal from '@/components/tesoreria/CobroConSalidasModal';
 import { base44 } from '@/api/base44Client';
 import { escapeRegex } from '@/lib/utils';
@@ -32,15 +33,26 @@ export default function Cobros() {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, cobro: null });
   const [filtroCliente, setFiltroCliente] = useState('');
   const [paginaActual, setPaginaActual] = useState(1);
+  const [rangoFechas, setRangoFechas] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const registrosPorPagina = 20;
 
   const PAGE_SIZE = 20;
 
+  const desdeISO = rangoFechas?.desde ? new Date(rangoFechas.desde).toISOString() : null;
+  const hastaISO = rangoFechas?.hasta ? new Date(rangoFechas.hasta).toISOString() : null;
+
   const queryCobros = React.useMemo(() => {
     const trimmed = filtroCliente?.trim();
-    if (!trimmed) return {};
-    return { cliente_nombre: { $regex: escapeRegex(trimmed), $options: 'i' } };
-  }, [filtroCliente]);
+    const base = {};
+    if (desdeISO && hastaISO) base.fecha = { $gte: desdeISO, $lte: hastaISO };
+    if (!trimmed) return base;
+    base.cliente_nombre = { $regex: escapeRegex(trimmed), $options: 'i' };
+    return base;
+  }, [filtroCliente, desdeISO, hastaISO]);
 
   const {
     data: cobrosData,
@@ -49,7 +61,7 @@ export default function Cobros() {
     isFetchingNextPage: loadingMoreCobros,
     isLoading
   } = useInfiniteQuery({
-    queryKey: ['cobros-infinite', filtroCliente],
+    queryKey: ['cobros-infinite', filtroCliente, desdeISO, hastaISO],
     queryFn: ({ pageParam = 0 }) => {
       if (Object.keys(queryCobros).length === 0) {
         return base44.entities.Cobro.list('-fecha', PAGE_SIZE, pageParam);
@@ -427,9 +439,18 @@ export default function Cobros() {
           </Button>
         </div>
 
-        {/* Filtro */}
-        <div className="mb-6">
-          <div className="relative max-w-md">
+        {/* Filtros */}
+        <div className="mb-6 flex flex-wrap items-center gap-4">
+          <DateRangeSelector
+            startDate={rangoFechas.desde}
+            endDate={rangoFechas.hasta}
+            onChange={({ start, end }) => {
+              setRangoFechas({ desde: start, hasta: end });
+              setPaginaActual(1);
+            }}
+            className="border border-slate-200 rounded-lg px-3 py-2 bg-white"
+          />
+          <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
             <Input
               type="text"

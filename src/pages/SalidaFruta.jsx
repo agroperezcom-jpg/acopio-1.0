@@ -1,25 +1,24 @@
-import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Plus, Loader2, ShoppingCart, Truck, Trash2, Package } from "lucide-react";
-import { format } from "date-fns";
-import AsyncSelect from "@/components/AsyncSelect";
-import DetalleLineItem from "@/components/DetalleLineItem";
-import EnvaseLineItemLlenos from "@/components/EnvaseLineItemLlenos";
-import ConfirmDetalleModal from "@/components/ConfirmDetalleModal";
-import ConfirmEnvaseModal from "@/components/ConfirmEnvaseModal";
-import QuickCreateModal from "@/components/QuickCreateModal";
-import GenericSuccessModal from "@/components/GenericSuccessModal";
-import { toast } from "sonner";
-import { toFixed2 } from "@/components/utils/precisionDecimal";
-import { invalidarTodoElSistema } from '@/utils/queryHelpers';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { format } from 'date-fns';
+import { toast } from 'sonner';
+import { Plus, Loader2, ShoppingCart, Trash2, Package } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import AsyncSelect from '@/components/AsyncSelect';
+import ConfirmDetalleModal from '@/components/ConfirmDetalleModal';
+import ConfirmEnvaseModal from '@/components/ConfirmEnvaseModal';
+import DetalleLineItem from '@/components/DetalleLineItem';
+import EnvaseLineItemLlenos from '@/components/EnvaseLineItemLlenos';
+import GenericSuccessModal from '@/components/GenericSuccessModal';
+import QuickCreateModal from '@/components/QuickCreateModal';
 import { actualizarSaldoEntidad } from '@/utils/contabilidad';
+import { invalidarTodoElSistema } from '@/utils/queryHelpers';
+import { registrarMovimientoEnvase } from '@/services/SaldoEnvasesService';
 import { ajustarStockProducto, ajustarStockEnvase } from '@/services/StockService';
-import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function SalidaFruta({ embedded = false }) {
   const queryClient = useQueryClient();
@@ -299,18 +298,18 @@ export default function SalidaFruta({ embedded = false }) {
         await ajustarStockProducto(base44, productoId, -totalSalida);
       }
 
-      // Ajustar stock vivo de envases ocupados (restar)
+      // Stock físico: disminuir envases ocupados (el cliente se lleva llenos)
       for (const envLleno of nuevaSalida.envases_llenos || []) {
         if (envLleno.cantidad > 0 && envLleno.envase_id) {
           await ajustarStockEnvase(base44, envLleno.envase_id, -envLleno.cantidad, 0);
         }
       }
 
-      // Actualizar saldo vivo de envases: cliente se lleva envases llenos → su deuda con nosotros AUMENTA
-      for (const envLleno of nuevaSalida.envases_llenos || []) {
-        if (envLleno.cantidad > 0 && envLleno.envase_tipo && clienteId) {
-          await actualizarDeudaEnvase(base44, 'Cliente', clienteId, envLleno.envase_tipo, envLleno.cantidad);
-        }
+      // Saldo de envases: cliente se lleva llenos → ENTREGA (aumenta deuda)
+      const envasesLlenosFiltrados = (nuevaSalida.envases_llenos || []).filter(e => e.cantidad > 0 && e.envase_tipo);
+      const itemsEntrega = envasesLlenosFiltrados.map(e => ({ tipo_envase: e.envase_tipo, cantidad: e.cantidad }));
+      if (itemsEntrega.length > 0 && clienteId) {
+        await registrarMovimientoEnvase('Cliente', clienteId, itemsEntrega, 'ENTREGA');
       }
 
       // ═══════════════════════════════════════════════════════════════
@@ -343,7 +342,7 @@ export default function SalidaFruta({ embedded = false }) {
       // Invalidar todas las queries del sistema
       invalidarTodoElSistema(queryClient);
 
-      setSuccessModal({ open: true, data: { ...nuevaSalida, cliente_whatsapp: cliente?.whatsapp } });
+      setSuccessModal({ open: true, data: { ...nuevaSalida, cliente_whatsapp: clienteData?.whatsapp } });
       
     } catch (error) {
       console.error('Error al registrar salida:', error);

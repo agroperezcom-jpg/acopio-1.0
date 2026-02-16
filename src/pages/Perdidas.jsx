@@ -16,43 +16,58 @@ export default function Perdidas() {
     return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
   });
 
-  const PAGE_SIZE = 500;
+  const TABLE_PAGE_SIZE = 20;
+  const LIMITE_STATS = 10000;
 
-  const { data: salidas = [], isLoading, error } = useQuery({
-    queryKey: ['salidas-confirmadas-perdidas', rango?.desde, rango?.hasta],
+  const desdeISO = rango?.desde ? new Date(rango.desde).toISOString() : null;
+  const hastaISO = rango?.hasta ? new Date(rango.hasta).toISOString() : null;
+  const filterConfirmadas = useMemo(() => {
+    if (!desdeISO || !hastaISO) return null;
+    return {
+      estado: 'Confirmada',
+      fecha: { $gte: desdeISO, $lte: hastaISO }
+    };
+  }, [desdeISO, hastaISO]);
+
+  // Query exclusiva para estadísticas (KPIs): trae TODAS las salidas del período para sumar correctamente
+  const statsQuery = useQuery({
+    queryKey: ['salidas-perdidas-stats', desdeISO, hastaISO],
     queryFn: async () => {
-      const desde = rango.desde.toISOString();
-      const hasta = rango.hasta.toISOString();
-      const filter = {
-        estado: 'Confirmada',
-        fecha: { $gte: desde, $lte: hasta }
-      };
-
-      let allSalidas = [];
-      let page = 0;
-
-      while (true) {
-        const batch = await base44.entities.SalidaFruta.filter(
-          filter,
-          '-fecha',
-          PAGE_SIZE,
-          page * PAGE_SIZE
-        );
-
-        allSalidas = [...allSalidas, ...(Array.isArray(batch) ? batch : [batch])];
-
-        if ((Array.isArray(batch) ? batch.length : 0) < PAGE_SIZE) break;
-
-        page++;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-
-      return allSalidas;
+      const list = await base44.entities.SalidaFruta.filter(
+        filterConfirmadas,
+        '-fecha',
+        LIMITE_STATS,
+        0
+      );
+      return Array.isArray(list) ? list : [list];
     },
-    enabled: !!rango?.desde && !!rango?.hasta,
+    enabled: !!filterConfirmadas,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
+  const salidasParaTotales = statsQuery.data ?? [];
+
+  // Query para la tabla visual: salidas paginadas (solo la página actual)
+  const [paginaTabla, setPaginaTabla] = useState(1);
+  const tableQuery = useQuery({
+    queryKey: ['salidas-perdidas-tabla', desdeISO, hastaISO, paginaTabla],
+    queryFn: async () => {
+      const skip = (paginaTabla - 1) * TABLE_PAGE_SIZE;
+      return base44.entities.SalidaFruta.filter(
+        filterConfirmadas,
+        '-fecha',
+        TABLE_PAGE_SIZE,
+        skip
+      );
+    },
+    enabled: !!filterConfirmadas,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false
+  });
+  const salidasTabla = tableQuery.data ?? [];
+
+  const isLoading = statsQuery.isLoading;
+  const error = statsQuery.error;
 
   const { data: productos = [] } = useQuery({
     queryKey: ['productos'],
@@ -61,15 +76,14 @@ export default function Perdidas() {
     refetchOnWindowFocus: false
   });
 
-  const salidasConfirmadas = salidas;
-
   const analisisPerdidas = useMemo(() => {
     let totalPerdidasBascula = 0;
     let totalPerdidasCalidad = 0;
     const perdidasPorProducto = {};
     const detallesPerdidas = [];
+    const salidas = salidasParaTotales ?? [];
 
-    salidasConfirmadas.forEach(salida => {
+    salidas.forEach(salida => {
       salida.detalles?.forEach(detalle => {
         const kilosSalidaOriginal = detalle.kilos_salida || 0;
         const kilosReales = detalle.kilos_reales || kilosSalidaOriginal;
@@ -120,7 +134,7 @@ export default function Perdidas() {
       perdidasPorProducto,
       detallesPerdidas: detallesPerdidas.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
     };
-  }, [salidasConfirmadas]);
+  }, [salidasParaTotales]);
 
   const exportarPDF = () => {
     const periodoText = rango
@@ -151,7 +165,7 @@ export default function Perdidas() {
         <div class="header">
           <div class="title">INFORME DE PÉRDIDAS</div>
           <p>Período: ${periodoText}</p>
-          <p>Salidas confirmadas: ${salidasConfirmadas.length}</p>
+          <p>Salidas confirmadas: ${salidasParaTotales.length}</p>
         </div>
 
         <div class="summary">
@@ -218,7 +232,7 @@ export default function Perdidas() {
             </h1>
             <p className="text-slate-600 mt-1">Control de pérdidas en salidas de fruta confirmadas</p>
           </div>
-          {rango && salidasConfirmadas.length > 0 && (
+          {rango && salidasParaTotales.length > 0 && (
             <Button onClick={exportarPDF} className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <FileDown className="h-4 w-4 mr-2" />
               Exportar PDF
@@ -243,7 +257,7 @@ export default function Perdidas() {
           </Card>
         ) : isLoading ? (
           <div className="text-center py-12">Cargando...</div>
-        ) : salidasConfirmadas.length === 0 ? (
+        ) : salidasParaTotales.length === 0 ? (
           <Card className="border-0 shadow-lg">
             <CardContent className="p-12 text-center">
               <TrendingDown className="h-16 w-16 text-slate-300 mx-auto mb-4" />
@@ -293,13 +307,74 @@ export default function Perdidas() {
                       <p className="text-3xl font-bold text-slate-800">
                         {analisisPerdidas.totalGeneral.toFixed(2)}
                       </p>
-                      <p className="text-xs text-slate-600 mt-1">kg en {salidasConfirmadas.length} salida(s)</p>
+                      <p className="text-xs text-slate-600 mt-1">kg en {salidasParaTotales.length} salida(s)</p>
                     </div>
                     <AlertTriangle className="h-12 w-12 text-slate-600 opacity-50" />
                   </div>
                 </CardContent>
               </Card>
             </div>
+
+            {/* Tabla visual: salidas del período (paginada) */}
+            <Card className="border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle>Salidas del período</CardTitle>
+                <p className="text-sm text-slate-500 mt-1">
+                  Página {paginaTabla} · Los totales de arriba corresponden a todo el período ({salidasParaTotales.length} salida(s))
+                </p>
+              </CardHeader>
+              <CardContent>
+                {tableQuery.isLoading ? (
+                  <div className="text-center py-8 text-slate-500">Cargando salidas...</div>
+                ) : salidasTabla.length === 0 ? (
+                  <p className="text-slate-500 text-center py-4">No hay salidas en esta página.</p>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-left p-2 font-semibold">Fecha</th>
+                            <th className="text-left p-2 font-semibold">Remito</th>
+                            <th className="text-left p-2 font-semibold">Cliente</th>
+                            <th className="text-right p-2 font-semibold">Detalles</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {salidasTabla.map((s, idx) => (
+                            <tr key={s.id ?? idx} className="border-b hover:bg-slate-50">
+                              <td className="p-2">{format(new Date(s.fecha), 'dd/MM/yy HH:mm')}</td>
+                              <td className="p-2 font-mono">{s.numero_remito ?? '-'}</td>
+                              <td className="p-2">{s.cliente_nombre ?? '-'}</td>
+                              <td className="p-2 text-right">{Array.isArray(s.detalles) ? s.detalles.length : 0} ítem(s)</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between mt-4">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPaginaTabla(p => Math.max(1, p - 1))}
+                        disabled={paginaTabla <= 1}
+                      >
+                        Anterior
+                      </Button>
+                      <span className="text-sm text-slate-600">Página {paginaTabla}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPaginaTabla(p => p + 1)}
+                        disabled={salidasTabla.length < TABLE_PAGE_SIZE}
+                      >
+                        Siguiente
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
 
             {/* Pérdidas por Producto */}
             <Card className="border-0 shadow-lg">

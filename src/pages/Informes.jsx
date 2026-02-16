@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FileText, Download, FileDown, MessageCircle, AlertTriangle } from "lucide-react";
-import { format, startOfMonth, subMonths, startOfYear, endOfMonth } from 'date-fns';
+import { format, startOfMonth, subMonths, endOfMonth } from 'date-fns';
 import { es } from 'date-fns/locale';
 import SearchableSelect from "@/components/SearchableSelect";
 import { toast } from 'sonner';
@@ -545,27 +545,6 @@ export default function Informes() {
                       className="text-xs h-7"
                     >
                       Mes Pasado
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => aplicarRangoRapido(
-                        startOfMonth(subMonths(new Date(), 2)),
-                        new Date()
-                      )}
-                      className="text-xs h-7"
-                    >
-                      Últimos 3 Meses
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => aplicarRangoRapido(startOfYear(new Date()), new Date())}
-                      className="text-xs h-7"
-                    >
-                      Este Año
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 gap-2">

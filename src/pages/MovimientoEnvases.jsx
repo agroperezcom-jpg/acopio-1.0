@@ -1,20 +1,20 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, Loader2, Package, ArrowLeftRight, Trash2 } from "lucide-react";
 import { format } from 'date-fns';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Loader2, Package, ArrowLeftRight, Trash2 } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import AsyncSelect from '@/components/AsyncSelect';
-import QuickCreateModal from '@/components/QuickCreateModal';
+import ConfirmEnvaseModal from '@/components/ConfirmEnvaseModal';
 import EnvaseLineItemSimple from '@/components/EnvaseLineItemSimple';
 import GenericSuccessModal from '@/components/GenericSuccessModal';
-import ConfirmEnvaseModal from '@/components/ConfirmEnvaseModal';
+import QuickCreateModal from '@/components/QuickCreateModal';
 import { descargarPDFMovimientoEnvases, compartirWhatsAppMovimientoEnvases } from '@/components/MovimientoEnvasesPDFGenerator';
+import { registrarMovimientoEnvase } from '@/services/SaldoEnvasesService';
 import { ajustarStockEnvase } from '@/services/StockService';
-import { actualizarDeudaEnvase } from '@/services/SaldoEnvasesService';
 
 export default function MovimientoEnvases() {
   const queryClient = useQueryClient();
@@ -27,7 +27,6 @@ export default function MovimientoEnvases() {
   const [clienteData, setClienteData] = useState(null);
   const [fleteroId, setFleteroId] = useState('');
   const [fleteroData, setFleteroData] = useState(null);
-  const [contabilizarViaje, setContabilizarViaje] = useState(false);
   
   const [envases, setEnvases] = useState([]);
   
@@ -142,16 +141,18 @@ export default function MovimientoEnvases() {
       return;
     }
 
-    // Validar stock de envases VACÍOS antes de guardar
+    // Validar stock físico de vacíos antes de guardar (solo para Salidas)
     for (const envase of envases) {
-      if (envase.cantidad_salida > 0) {
+      const salida = parseInt(envase.cantidad_salida) || 0;
+      if (salida > 0) {
         const envaseData = envasesList.find(e => e.id === envase.envase_id);
-        if (!envaseData) continue;
-        
+        if (!envaseData) {
+          alert(`Error: No se encontró el envase seleccionado.`);
+          return;
+        }
         const stockDisponible = envaseData.stock_vacios || 0;
-        
-        if (envase.cantidad_salida > stockDisponible) {
-          alert(`Error: Envase "${envaseData.tipo}" - Salida (${envase.cantidad_salida}) supera stock vacíos disponible (${stockDisponible}). Movimiento de Envases solo maneja envases vacíos.`);
+        if (salida > stockDisponible) {
+          alert(`Error: Envase "${envaseData.tipo}" - Salida (${salida}) supera stock vacíos disponible (${stockDisponible}).`);
           return;
         }
       }
@@ -198,84 +199,75 @@ export default function MovimientoEnvases() {
       }
 
       const entidadId = tipoEntidad === 'Proveedor' ? proveedorId : clienteId;
+
+      // Saldo de envases: delegar al SaldoEnvasesService
+      const itemsEntrega = [];
+      const itemsRecepcion = [];
       for (const envase of movimiento.movimiento_envases) {
         const tipoEnvase = envase.envase_tipo || envasesList.find(e => e.id === envase.envase_id)?.tipo;
         if (!tipoEnvase || !entidadId) continue;
         const ingreso = parseInt(envase.cantidad_ingreso) || 0;
         const salida = parseInt(envase.cantidad_salida) || 0;
-        if (tipoEntidad === 'Proveedor') {
-          const delta = salida - ingreso;
-          if (delta !== 0) await actualizarDeudaEnvase(base44, 'Proveedor', entidadId, tipoEnvase, delta);
-        } else {
-          const delta = ingreso - salida;
-          if (delta !== 0) await actualizarDeudaEnvase(base44, 'Cliente', entidadId, tipoEnvase, delta);
-        }
+        if (salida > 0) itemsEntrega.push({ tipo_envase: tipoEnvase, cantidad: salida });
+        if (ingreso > 0) itemsRecepcion.push({ tipo_envase: tipoEnvase, cantidad: ingreso });
       }
-      
-      // Refrescar datos ANTES de mostrar el modal de éxito
+      if (itemsEntrega.length > 0) {
+        await registrarMovimientoEnvase(tipoEntidad, entidadId, itemsEntrega, 'ENTREGA');
+      }
+      if (itemsRecepcion.length > 0) {
+        await registrarMovimientoEnvase(tipoEntidad, entidadId, itemsRecepcion, 'RECEPCION');
+      }
+
       await queryClient.invalidateQueries(['movimientos']);
       await queryClient.invalidateQueries(['envases']);
+      await queryClient.invalidateQueries(['proveedores-saldosenvases']);
+      await queryClient.invalidateQueries(['clientes-saldosenvases']);
       await queryClient.refetchQueries(['movimientos']);
       await queryClient.refetchQueries(['envases']);
+
+      // Obtener entidad actualizada con saldos post-movimiento (para PDF/WhatsApp)
+      const Entity = tipoEntidad === 'Proveedor' ? base44.entities.Proveedor : base44.entities.Cliente;
+      const listRefreshed = await Entity.filter({ id: entidadId });
+      const entidadActualizada = Array.isArray(listRefreshed) ? listRefreshed[0] : listRefreshed;
       
       setSuccessModal({ 
         open: true, 
-        data: { ...movimiento, id: created.id, entidad_whatsapp: entidadData?.whatsapp }
+        data: { 
+          ...movimiento, 
+          id: created.id, 
+          entidad_whatsapp: entidadData?.whatsapp,
+          entidadActualizada
+        }
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const saldosParaModal = () => {
+    const ent = successModal.data?.entidadActualizada;
+    if (!ent?.saldo_envases) return [];
+    const obj = typeof ent.saldo_envases === 'object' && !Array.isArray(ent.saldo_envases)
+      ? ent.saldo_envases
+      : {};
+    return Object.entries(obj).map(([tipo, saldo]) => ({
+      envase_tipo: tipo,
+      saldo: Number(saldo) || 0
+    }));
+  };
+
   const handleDownloadPDF = () => {
     if (!successModal.data) return;
-    const entidadId = successModal.data.proveedor_id || successModal.data.cliente_id;
     const tipo = successModal.data.tipo_entidad || 'Proveedor';
-    const entidadData = tipo === 'Proveedor' ? proveedorData : clienteData;
-    
-    // Usar fleteroData del estado en lugar de buscar en array
-    const saldosActualizados = calcularSaldosConMovimiento(entidadId, tipo, successModal.data.movimiento_envases);
-    
-    descargarPDFMovimientoEnvases(successModal.data, entidadData, fleteroData, saldosActualizados);
+    const entidadData = successModal.data.entidadActualizada || (tipo === 'Proveedor' ? proveedorData : clienteData);
+    descargarPDFMovimientoEnvases(successModal.data, entidadData, fleteroData, saldosParaModal());
   };
 
-  const handleShareWhatsApp = async () => {
+  const handleShareWhatsApp = () => {
     if (!successModal.data) return;
-    const entidadId = successModal.data.proveedor_id || successModal.data.cliente_id;
     const tipo = successModal.data.tipo_entidad || 'Proveedor';
-    const entidadData = tipo === 'Proveedor' ? proveedorData : clienteData;
-    
-    // Calcular saldos actualizados INCLUYENDO el movimiento actual
-    const saldosActualizados = calcularSaldosConMovimiento(entidadId, tipo, successModal.data.movimiento_envases);
-    
-    compartirWhatsAppMovimientoEnvases(successModal.data, entidadData, successModal.data.entidad_whatsapp, saldosActualizados);
-  };
-
-  const calcularSaldosConMovimiento = (entidadId, tipo, movimientoEnvases) => {
-    // Leer saldos desde la entidad (campo saldo_envases que debe existir)
-    const entidadData = tipo === 'Proveedor' ? proveedorData : clienteData;
-    const saldosActuales = entidadData?.saldo_envases || {};
-    
-    // Convertir a formato esperado
-    const saldosPorTipo = { ...saldosActuales };
-    
-    // Aplicar el movimiento actual
-    movimientoEnvases.forEach(e => {
-      if (!saldosPorTipo[e.envase_tipo]) {
-        saldosPorTipo[e.envase_tipo] = 0;
-      }
-      // Para proveedores y clientes: salida aumenta deuda, ingreso reduce deuda
-      saldosPorTipo[e.envase_tipo] += (e.cantidad_salida || 0) - (e.cantidad_ingreso || 0);
-    });
-    
-    // Convertir de vuelta a array, incluyendo todos los envases del movimiento
-    const tiposEnMovimiento = movimientoEnvases.map(e => e.envase_tipo);
-    const todosLosTipos = [...new Set([...Object.keys(saldosPorTipo), ...tiposEnMovimiento])];
-    
-    return todosLosTipos.map(tipo => ({
-      envase_tipo: tipo,
-      saldo: saldosPorTipo[tipo] || 0
-    })).filter(s => s.saldo !== 0 || tiposEnMovimiento.includes(s.envase_tipo));
+    const entidadData = successModal.data.entidadActualizada || (tipo === 'Proveedor' ? proveedorData : clienteData);
+    compartirWhatsAppMovimientoEnvases(successModal.data, entidadData, successModal.data.entidad_whatsapp, saldosParaModal());
   };
 
   const getCreateFields = () => {
@@ -330,7 +322,6 @@ export default function MovimientoEnvases() {
     setClienteData(null);
     setFleteroId('');
     setFleteroData(null);
-    setContabilizarViaje(false);
     setEnvases([]);
     setEnvaseActual({
       envase_id: '',

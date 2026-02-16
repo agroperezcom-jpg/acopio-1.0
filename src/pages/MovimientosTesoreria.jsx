@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format, startOfMonth, endOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { ArrowLeftRight, Plus, Loader2, Calendar, DollarSign, TrendingUp, TrendingDown, Trash2, FileDown, FileText, Filter, ChevronLeft, ChevronRight, Edit } from 'lucide-react';
@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import SearchableSelect from '@/components/SearchableSelect';
+import DateRangeSelector from '@/components/DateRangeSelector';
 import ExportarMovimientosModal from '@/components/tesoreria/ExportarMovimientosModal';
 import ExportarMovimientosPDFModal from '@/components/tesoreria/ExportarMovimientosPDFModal';
 import EditarFechaMovimientoModal from '@/components/tesoreria/EditarFechaMovimientoModal';
@@ -42,6 +43,11 @@ export default function MovimientosTesoreria() {
   const [pagina, setPagina] = useState(1);
   const [filtroTipo, setFiltroTipo] = useState('todos');
   const [filtroOrigen, setFiltroOrigen] = useState('todos');
+  const [rangoFechas, setRangoFechas] = useState(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
+  });
   const ITEMS_POR_PAGINA = 20;
   const [formData, setFormData] = useState({
     fecha: format(new Date(), 'yyyy-MM-dd'),
@@ -55,73 +61,71 @@ export default function MovimientosTesoreria() {
     comprobante: ''
   });
 
-  // Consulta paginada con filtros
+  const desdeISO = rangoFechas?.desde ? new Date(rangoFechas.desde).toISOString() : null;
+  const hastaISO = rangoFechas?.hasta ? new Date(rangoFechas.hasta).toISOString() : null;
+
+  const buildQuery = () => {
+    const query = {};
+    if (desdeISO && hastaISO) {
+      query.fecha = { $gte: desdeISO, $lte: hastaISO };
+    }
+    if (filtroTipo !== 'todos') {
+      if (filtroTipo === 'ingresos') {
+        query.tipo_movimiento = { $in: ['Ingreso Manual', 'Crédito Bancario'] };
+      } else if (filtroTipo === 'egresos') {
+        query.tipo_movimiento = { $in: ['Egreso Manual', 'Débito Bancario'] };
+      } else if (filtroTipo === 'transferencias') {
+        query.tipo_movimiento = 'Transferencia Interna';
+      }
+    }
+    if (filtroOrigen !== 'todos') {
+      if (filtroOrigen === 'cobros') {
+        query.referencia_origen_tipo = 'Cobro';
+      } else if (filtroOrigen === 'pagos') {
+        query.referencia_origen_tipo = 'Pago';
+      } else if (filtroOrigen === 'ingresos_varios') {
+        query.referencia_origen_tipo = 'IngresoVario';
+      } else if (filtroOrigen === 'egresos_varios') {
+        query.referencia_origen_tipo = 'Egreso';
+      }
+    }
+    return query;
+  };
+
+  // Consulta paginada con filtros (incluye rango de fechas)
   const { data: movimientos = [], isLoading } = useQuery({
-    queryKey: ['movimientostesoreria', pagina, filtroTipo, filtroOrigen],
+    queryKey: ['movimientostesoreria', pagina, filtroTipo, filtroOrigen, desdeISO, hastaISO],
     queryFn: async () => {
-      let query = {};
-      
-      // Aplicar filtros
-      if (filtroTipo !== 'todos') {
-        if (filtroTipo === 'ingresos') {
-          query.tipo_movimiento = { $in: ['Ingreso Manual', 'Crédito Bancario'] };
-        } else if (filtroTipo === 'egresos') {
-          query.tipo_movimiento = { $in: ['Egreso Manual', 'Débito Bancario'] };
-        } else if (filtroTipo === 'transferencias') {
-          query.tipo_movimiento = 'Transferencia Interna';
-        }
-      }
-      
-      if (filtroOrigen !== 'todos') {
-        if (filtroOrigen === 'cobros') {
-          query.referencia_origen_tipo = 'Cobro';
-        } else if (filtroOrigen === 'pagos') {
-          query.referencia_origen_tipo = 'Pago';
-        } else if (filtroOrigen === 'ingresos_varios') {
-          query.referencia_origen_tipo = 'IngresoVario';
-        } else if (filtroOrigen === 'egresos_varios') {
-          query.referencia_origen_tipo = 'Egreso';
-        }
-      }
-      
+      const query = buildQuery();
       const skip = (pagina - 1) * ITEMS_POR_PAGINA;
       return base44.entities.MovimientoTesoreria.filter(query, '-fecha', ITEMS_POR_PAGINA, skip);
     },
+    enabled: !!desdeISO && !!hastaISO,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
-  // Consulta para contar total de movimientos (para paginación)
+  // Consulta para contar total de movimientos (para paginación), mismo rango de fechas
   const { data: totalMovimientos = 0 } = useQuery({
-    queryKey: ['movimientostesoreria-count', filtroTipo, filtroOrigen],
+    queryKey: ['movimientostesoreria-count', filtroTipo, filtroOrigen, desdeISO, hastaISO],
     queryFn: async () => {
-      let query = {};
-      
-      if (filtroTipo !== 'todos') {
-        if (filtroTipo === 'ingresos') {
-          query.tipo_movimiento = { $in: ['Ingreso Manual', 'Crédito Bancario'] };
-        } else if (filtroTipo === 'egresos') {
-          query.tipo_movimiento = { $in: ['Egreso Manual', 'Débito Bancario'] };
-        } else if (filtroTipo === 'transferencias') {
-          query.tipo_movimiento = 'Transferencia Interna';
-        }
-      }
-      
-      if (filtroOrigen !== 'todos') {
-        if (filtroOrigen === 'cobros') {
-          query.referencia_origen_tipo = 'Cobro';
-        } else if (filtroOrigen === 'pagos') {
-          query.referencia_origen_tipo = 'Pago';
-        } else if (filtroOrigen === 'ingresos_varios') {
-          query.referencia_origen_tipo = 'IngresoVario';
-        } else if (filtroOrigen === 'egresos_varios') {
-          query.referencia_origen_tipo = 'Egreso';
-        }
-      }
-      
+      const query = buildQuery();
       const todos = await base44.entities.MovimientoTesoreria.filter(query);
       return todos.length;
     },
+    enabled: !!desdeISO && !!hastaISO,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false
+  });
+
+  // Consulta para totales del período (Total Ingresos / Total Egresos) en el rango de fechas
+  const { data: movimientosParaTotales = [] } = useQuery({
+    queryKey: ['movimientostesoreria-totales', filtroTipo, filtroOrigen, desdeISO, hastaISO],
+    queryFn: async () => {
+      const query = buildQuery();
+      return base44.entities.MovimientoTesoreria.filter(query, '-fecha', 5000, 0);
+    },
+    enabled: !!desdeISO && !!hastaISO,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
@@ -675,14 +679,22 @@ export default function MovimientosTesoreria() {
     }
   };
 
-  // Totales de la página actual
-  const totalIngresos = movimientos
-    .filter(m => ['Ingreso Manual', 'Crédito Bancario'].includes(m.tipo_movimiento))
-    .reduce((sum, m) => sum + (m.monto || 0), 0);
+  // Totales del período (rango de fechas + filtros), no solo de la página actual
+  const totalIngresos = useMemo(
+    () =>
+      movimientosParaTotales
+        .filter((m) => ['Ingreso Manual', 'Crédito Bancario'].includes(m.tipo_movimiento))
+        .reduce((sum, m) => sum + (m.monto || 0), 0),
+    [movimientosParaTotales]
+  );
 
-  const totalEgresos = movimientos
-    .filter(m => ['Egreso Manual', 'Débito Bancario'].includes(m.tipo_movimiento))
-    .reduce((sum, m) => sum + (m.monto || 0), 0);
+  const totalEgresos = useMemo(
+    () =>
+      movimientosParaTotales
+        .filter((m) => ['Egreso Manual', 'Débito Bancario'].includes(m.tipo_movimiento))
+        .reduce((sum, m) => sum + (m.monto || 0), 0),
+    [movimientosParaTotales]
+  );
 
   const totalPaginas = Math.ceil(totalMovimientos / ITEMS_POR_PAGINA);
 
@@ -974,6 +986,16 @@ export default function MovimientosTesoreria() {
                 <Filter className="h-4 w-4 text-slate-500" />
                 <span className="text-sm font-medium text-slate-700">Filtros:</span>
               </div>
+
+              <DateRangeSelector
+                startDate={rangoFechas.desde}
+                endDate={rangoFechas.hasta}
+                onChange={({ start, end }) => {
+                  setRangoFechas({ desde: start, hasta: end });
+                  setPagina(1);
+                }}
+                className="border border-slate-200 rounded-lg px-3 py-2 bg-white"
+              />
               
               <div className="flex-1 min-w-[200px]">
                 <Select value={filtroTipo} onValueChange={(v) => { setFiltroTipo(v); setPagina(1); }}>
@@ -1024,8 +1046,8 @@ export default function MovimientosTesoreria() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-slate-500">Total Movimientos</p>
-                  <p className="text-2xl font-bold text-teal-600">{movimientos.length}</p>
+                  <p className="text-sm text-slate-500">Total Movimientos (período)</p>
+                  <p className="text-2xl font-bold text-teal-600">{totalMovimientos}</p>
                 </div>
                 <ArrowLeftRight className="h-10 w-10 text-teal-600 opacity-20" />
               </div>
@@ -1071,9 +1093,9 @@ export default function MovimientosTesoreria() {
             <CardContent className="p-12 text-center">
               <ArrowLeftRight className="h-16 w-16 text-slate-300 mx-auto mb-4" />
               <p className="text-slate-500">
-                {filtroTipo !== 'todos' || filtroOrigen !== 'todos' 
-                  ? 'No hay movimientos que coincidan con los filtros'
-                  : 'No hay movimientos registrados'}
+                {filtroTipo !== 'todos' || filtroOrigen !== 'todos'
+                  ? 'No hay movimientos que coincidan con los filtros en el período seleccionado'
+                  : 'No hay movimientos en el período seleccionado'}
               </p>
             </CardContent>
           </Card>

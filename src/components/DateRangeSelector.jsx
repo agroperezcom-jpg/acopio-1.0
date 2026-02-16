@@ -8,7 +8,6 @@ const PRESETS = {
   ayer: 'ayer',
   esteMes: 'esteMes',
   mesPasado: 'mesPasado',
-  personalizado: 'personalizado'
 };
 
 function getRangeForPreset(preset) {
@@ -45,7 +44,7 @@ function getRangeForPreset(preset) {
 export default function DateRangeSelector({ startDate, endDate, onChange, className }) {
   const toYMD = (d) => (d ? format(d instanceof Date ? d : new Date(d), 'yyyy-MM-dd') : '');
 
-  const [preset, setPreset] = useState(PRESETS.personalizado);
+  const [preset, setPreset] = useState('');
   const [desde, setDesde] = useState(toYMD(startDate));
   const [hasta, setHasta] = useState(toYMD(endDate));
 
@@ -57,10 +56,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
   const handlePresetChange = (e) => {
     const key = e.target.value;
     setPreset(key);
-
-    if (key === PRESETS.personalizado) {
-      return;
-    }
+    if (!key) return;
 
     const range = getRangeForPreset(key);
     if (range) {
@@ -72,11 +68,11 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
     }
   };
 
-  // Al tocar fechas manuales: dropdown → Personalizado; solo actualizamos 'desde', 'hasta' se mantiene
+  // Al tocar fechas manuales: dropdown queda neutro (sin preset); solo actualizamos 'desde'
   const handleDesdeChange = (e) => {
     const value = e.target.value;
     setDesde(value);
-    setPreset(PRESETS.personalizado);
+    setPreset('');
     const start = value ? new Date(value) : null;
     const end = hasta ? new Date(hasta + 'T23:59:59') : null;
     if (start && end && start <= end) {
@@ -88,7 +84,7 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
   const handleHastaChange = (e) => {
     const value = e.target.value;
     setHasta(value);
-    setPreset(PRESETS.personalizado);
+    setPreset('');
     const end = value ? new Date(value + 'T23:59:59') : null;
     const start = desde ? new Date(desde) : null;
     if (start && end && start <= end) {
@@ -103,14 +99,14 @@ export default function DateRangeSelector({ startDate, endDate, onChange, classN
       <select
         value={preset}
         onChange={handlePresetChange}
-        className={cn(barraClase, 'min-w-[140px] cursor-pointer')}
+        className={cn(barraClase, 'w-40 shrink-0 cursor-pointer')}
         aria-label="Preset de rango"
       >
+        <option value="">—</option>
         <option value={PRESETS.hoy}>Hoy</option>
         <option value={PRESETS.ayer}>Ayer</option>
         <option value={PRESETS.esteMes}>Este Mes</option>
         <option value={PRESETS.mesPasado}>Mes Pasado</option>
-        <option value={PRESETS.personalizado}>Personalizado</option>
       </select>
 
       <label className="sr-only">Desde</label>

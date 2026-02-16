@@ -1,28 +1,18 @@
 import React, { useState, useMemo } from 'react';
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { format, startOfMonth, endOfDay } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Package, Search, TrendingUp, TrendingDown, AlertTriangle, AlertCircle, Edit, History } from 'lucide-react';
+import { Package, Search, AlertTriangle, Edit, History } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import AjusteManualEnvaseModal from '@/components/inventario/AjusteManualEnvaseModal';
 import HistorialAjustesModal from '@/components/inventario/HistorialAjustesModal';
-import DateRangeSelector from '@/components/DateRangeSelector';
+import DetalleProductoInventario from '@/components/inventario/DetalleProductoInventario';
 import { toFixed2, sumaExacta } from '@/components/utils/precisionDecimal';
 import { base44 } from '@/api/base44Client';
 
-const HISTORIAL_PAGE_SIZE = 200;
-
 export default function Inventario() {
   const queryClient = useQueryClient();
-  const [rangoHistorial, setRangoHistorial] = useState(() => {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    return { desde: startOfMonth(hoy), hasta: endOfDay(hoy) };
-  });
   const [search, setSearch] = useState('');
   const [selectedProducto, setSelectedProducto] = useState(null);
   const [ajusteModal, setAjusteModal] = useState({ open: false, envase: null, tipoAjuste: null, stockActual: 0 });
@@ -32,38 +22,6 @@ export default function Inventario() {
   const { data: productos = [] } = useQuery({
     queryKey: ['productos'],
     queryFn: () => base44.entities.Producto.list(),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  const { data: movimientos = [], error: errorMov } = useQuery({
-    queryKey: ['movimientos-inventario', rangoHistorial?.desde?.toISOString?.(), rangoHistorial?.hasta?.toISOString?.()],
-    queryFn: async () => {
-      const desde = rangoHistorial.desde.toISOString();
-      const hasta = rangoHistorial.hasta.toISOString();
-      return base44.entities.Movimiento.filter(
-        { fecha: { $gte: desde, $lte: hasta } },
-        '-fecha',
-        HISTORIAL_PAGE_SIZE
-      );
-    },
-    enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
-
-  const { data: salidas = [], error: errorSal } = useQuery({
-    queryKey: ['salidas-inventario', rangoHistorial?.desde?.toISOString?.(), rangoHistorial?.hasta?.toISOString?.()],
-    queryFn: async () => {
-      const desde = rangoHistorial.desde.toISOString();
-      const hasta = rangoHistorial.hasta.toISOString();
-      return base44.entities.SalidaFruta.filter(
-        { fecha: { $gte: desde, $lte: hasta } },
-        '-fecha',
-        HISTORIAL_PAGE_SIZE
-      );
-    },
-    enabled: !!rangoHistorial?.desde && !!rangoHistorial?.hasta,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
@@ -93,62 +51,6 @@ export default function Inventario() {
       p.producto_completo.toLowerCase().includes(searchLower)
     );
   }, [productosConStock, search]);
-
-  const calcularHistoricoProducto = (productoId) => {
-    const historico = [];
-
-    // Ingresos desde movimientos
-    movimientos.forEach(mov => {
-      if (mov.tipo_movimiento === 'Ingreso de Fruta' && mov.pesajes) {
-        mov.pesajes.forEach(p => {
-          if (p.producto_id === productoId) {
-            historico.push({
-              fecha: mov.fecha,
-              tipo: 'ingreso',
-              cantidad: toFixed2(p.peso_neto || 0),
-              referencia: `Ingreso - ${mov.proveedor_nombre}`,
-              proveedor: mov.proveedor_nombre
-            });
-          }
-        });
-      }
-    });
-
-    // Salidas (PÉRDIDAS DEFINITIVAS - NUNCA VUELVEN AL STOCK)
-    salidas.forEach(sal => {
-      if (sal.detalles) {
-        sal.detalles.forEach(d => {
-          if (d.producto_id === productoId) {
-            // ═══════════════════════════════════════════════════════════════════
-            // CORRECCIÓN CRÍTICA: Stock se reduce por ORIGINALES, NO por efectivos
-            // ═══════════════════════════════════════════════════════════════════
-            // - kilos_salida ORIGINALES: Lo que salió del acopio (RESTA del stock)
-            // - Pérdidas (báscula + calidad): NO vuelven al inventario
-            // - En historial mostramos los ORIGINALES para reflejar impacto real en stock
-            
-            const kilosOriginalesSalidos = d.kilos_salida;
-            
-            historico.push({
-              fecha: sal.fecha,
-              tipo: 'salida',
-              cantidad: kilosOriginalesSalidos, // Mostrar ORIGINALES (impacto real en stock)
-              referencia: `${sal.numero_remito} - ${sal.cliente_nombre}`,
-              cliente: sal.cliente_nombre,
-              estado: sal.estado,
-              // Datos adicionales para detalle expandido
-              kilosReales: sal.estado === 'Confirmada' ? (d.kilos_reales || d.kilos_salida) : null,
-              descuentoKg: sal.estado === 'Confirmada' ? (d.descuento_kg || 0) : null,
-              kilosEfectivos: sal.estado === 'Confirmada' ? toFixed2((d.kilos_reales || d.kilos_salida) - (d.descuento_kg || 0)) : null,
-              perdidaBascula: sal.estado === 'Confirmada' ? toFixed2(d.kilos_salida - (d.kilos_reales || d.kilos_salida)) : 0,
-              perdidaCalidad: sal.estado === 'Confirmada' ? toFixed2(d.descuento_kg || 0) : 0
-            });
-          }
-        });
-      }
-    });
-
-    return historico.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-  };
 
   const totalStock = toFixed2(sumaExacta(...productosConStock.map(p => p.stock)));
   const productosStockBajo = productosConStock.filter(p => p.stockBajo).length;
@@ -180,22 +82,6 @@ export default function Inventario() {
     const stockActual = tipoAjuste === 'vacios' ? envase.stock_vacios : envase.stock_ocupados;
     setAjusteModal({ open: true, envase, tipoAjuste, stockActual });
   };
-
-  if (errorMov || errorSal) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-6 lg:p-8">
-        <div className="max-w-7xl mx-auto">
-          <Card className="border-red-200 bg-red-50">
-            <CardContent className="p-12 text-center">
-              <AlertCircle className="h-12 w-12 text-red-600 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-red-900 mb-2">Error al cargar inventario</h3>
-              <p className="text-red-700">No se pudieron cargar los datos. Por favor, recarga la página.</p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-6 lg:p-8">
@@ -308,106 +194,7 @@ export default function Inventario() {
                     </div>
 
                     {selectedProducto?.id === producto.id && (
-                      <div className="mt-4 pt-4 border-t border-slate-200">
-                        <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                          <h5 className="text-sm font-semibold text-blue-900 mb-2">
-                            Breakdown de Stock (Kilos Netos)
-                            {rangoHistorial && (
-                              <span className="font-normal text-blue-700 ml-1">
-                                — en el período seleccionado
-                              </span>
-                            )}
-                          </h5>
-                          <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div>
-                              <span className="text-slate-600">Total Ingresado:</span>
-                              <span className="ml-2 font-semibold text-green-700">
-                               +{toFixed2(sumaExacta(
-                                 ...calcularHistoricoProducto(producto.id)
-                                   .filter(m => m.tipo === 'ingreso')
-                                   .map(m => m.cantidad)
-                               ))} kg
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-slate-600">Total Salido:</span>
-                              <span className="ml-2 font-semibold text-red-700">
-                               -{toFixed2(sumaExacta(
-                                 ...calcularHistoricoProducto(producto.id)
-                                   .filter(m => m.tipo === 'salida')
-                                   .map(m => m.cantidad)
-                               ))} kg
-                              </span>
-                            </div>
-                            <div className="col-span-2 pt-2 border-t border-blue-300">
-                              <span className="text-slate-700 font-semibold">Stock Disponible:</span>
-                              <span className={`ml-2 text-lg font-bold ${
-                                producto.stock < 0 ? 'text-red-700' : producto.stockBajo ? 'text-orange-600' : 'text-green-700'
-                              }`}>
-                                {producto.stock.toFixed(2)} kg
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mb-4">
-                          <p className="text-xs text-slate-500 mb-2">Ver movimientos en este rango:</p>
-                          <DateRangeSelector
-                            startDate={rangoHistorial.desde}
-                            endDate={rangoHistorial.hasta}
-                            onChange={({ start, end }) => setRangoHistorial({ desde: start, hasta: end })}
-                            className="flex-wrap"
-                          />
-                        </div>
-                        <h4 className="font-semibold text-slate-700 mb-3">Historial de Movimientos</h4>
-                        {!rangoHistorial ? (
-                          <p className="text-sm text-slate-500 py-4">Elige un rango de fechas arriba para cargar el historial (ej. Enero 2025).</p>
-                        ) : (
-                        <div className="space-y-2 max-h-96 overflow-y-auto">
-                          {calcularHistoricoProducto(producto.id).map((mov, idx) => (
-                            <div key={idx} className="p-3 bg-slate-50 rounded">
-                              <div className="flex items-start justify-between">
-                                <div className="flex items-start gap-3">
-                                  {mov.tipo === 'ingreso' ? (
-                                    <TrendingUp className="h-5 w-5 text-green-600 mt-0.5" />
-                                  ) : (
-                                    <TrendingDown className="h-5 w-5 text-red-600 mt-0.5" />
-                                  )}
-                                  <div>
-                                    <p className="text-sm font-medium text-slate-800">{mov.referencia}</p>
-                                    <p className="text-xs text-slate-500">
-                                      {format(new Date(mov.fecha), "dd/MM/yyyy HH:mm", { locale: es })}
-                                    </p>
-                                    {mov.estado === 'Pendiente de Confirmación' && (
-                                      <span className="text-xs text-amber-600 font-medium">
-                                        (Pendiente confirmación)
-                                      </span>
-                                    )}
-                                    {mov.estado === 'Confirmada' && mov.kilosEfectivos != null && (
-                                      <div className="text-xs text-slate-600 mt-1 space-y-0.5">
-                                        <p>└─ Efectivos cobrados: <strong className="text-green-700">{mov.kilosEfectivos.toFixed(2)} kg</strong></p>
-                                        {(mov.perdidaBascula > 0 || mov.perdidaCalidad > 0) && (
-                                          <p className="text-red-600">
-                                            └─ Pérdidas irreversibles: <strong>{(mov.perdidaBascula + mov.perdidaCalidad).toFixed(2)} kg</strong> (no vuelven al stock)
-                                          </p>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <span className={`font-semibold ${
-                                    mov.tipo === 'ingreso' ? 'text-green-600' : 'text-red-600'
-                                  }`}>
-                                    {mov.tipo === 'ingreso' ? '+' : '-'}{mov.cantidad.toFixed(2)} kg
-                                  </span>
-                                  {mov.tipo === 'salida' && <p className="text-xs text-slate-500 mt-0.5">(Originales salidos)</p>}
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        )}
-                      </div>
+                      <DetalleProductoInventario producto={producto} />
                     )}
                   </div>
                 </button>

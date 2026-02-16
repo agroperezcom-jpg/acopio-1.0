@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,19 +9,15 @@ import { Input } from "@/components/ui/input";
 import { downloadResumenSaldosPDF } from '../components/PDFGenerator';
 import { Button } from "@/components/ui/button";
 import { format } from 'date-fns';
+import { recalcularSaldoEnvasesEntidad } from '@/services/SaldoEnvasesService';
 
 const PAGE_SIZE = 500;
+const CONCURRENCY_HEALING = 3;
 
 /**
- * Normaliza entidad.saldo_envases para lectura segura (parser 'todo terreno').
- * - null o undefined → {}.
- * - Objeto plano → copia del objeto.
- * - String: intenta JSON.parse; si falla, reemplaza comillas simples por dobles y vuelve a parsear.
- * - Si todo falla → {} y, en desarrollo, console.warn con debugLabel.
- * @param {*} raw - valor crudo de saldo_envases
- * @param {string} [debugLabel] - identificador de la entidad para aviso si el parseo falla
+ * Normaliza entidad.saldo_envases para lectura segura.
  */
-function normalizarSaldoEnvases(raw, debugLabel) {
+function normalizarSaldoEnvases(raw) {
   if (raw == null) return {};
   if (typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
   if (typeof raw !== 'string') return {};
@@ -31,46 +27,63 @@ function normalizarSaldoEnvases(raw, debugLabel) {
     return {};
   } catch {
     try {
-      const conDobles = raw.replace(/'/g, '"');
+      const conDobles = String(raw).replace(/'/g, '"');
       const parsed = JSON.parse(conDobles);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
       return {};
     } catch {
-      const isDev = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
-      const isDevVite = typeof import.meta !== 'undefined' && import.meta.env?.DEV;
-      if (typeof debugLabel === 'string' && debugLabel && (isDev || isDevVite)) {
-        console.warn('[SaldosEnvases] saldo_envases con formato no válido:', debugLabel, 'raw:', raw?.slice?.(0, 80));
-      }
       return {};
     }
   }
 }
 
-/** True si tiene al menos una clave (está en el tracking). Si hay claves, la entidad se muestra. */
-function tieneTrackingEnvases(saldoEnvases, debugLabel) {
-  const obj = normalizarSaldoEnvases(saldoEnvases, debugLabel);
-  return Object.keys(obj).length > 0;
+/**
+ * Convierte saldo_envases (objeto) a array de { tipo, saldo } (solo saldo !== 0).
+ * Si el objeto está vacío, devuelve [] (se muestra como 0).
+ */
+function saldoEnvasesAArray(saldoObj) {
+  if (!saldoObj || typeof saldoObj !== 'object') return [];
+  return Object.entries(saldoObj)
+    .map(([tipo, saldo]) => ({ tipo: String(tipo), saldo: Number(saldo) || 0 }))
+    .filter((e) => e.saldo !== 0);
 }
 
 /**
- * Convierte saldo_envases a array de { tipo, saldo } (solo saldo !== 0).
+ * Ejecuta una cola de tareas con concurrencia limitada.
  */
-function saldoEnvasesAArray(saldoEnvases, debugLabel) {
-  try {
-    const obj = normalizarSaldoEnvases(saldoEnvases, debugLabel);
-    if (!obj || typeof obj !== 'object') return [];
-    return Object.entries(obj)
-      .map(([tipo, saldo]) => ({ tipo: String(tipo), saldo: Number(saldo) || 0 }))
-      .filter((e) => e.saldo !== 0);
-  } catch {
-    return [];
+async function runWithConcurrency(items, concurrency, fn) {
+  const executing = new Set();
+  for (const item of items) {
+    const promise = Promise.resolve().then(() => fn(item));
+    executing.add(promise);
+    promise.finally(() => executing.delete(promise));
+    if (executing.size >= concurrency) {
+      await Promise.race(executing);
+    }
   }
+  await Promise.all(executing);
+}
+
+/**
+ * Compara dos objetos de saldo (solo claves numéricas) para ver si son iguales.
+ */
+function saldosIguales(a, b) {
+  const keysA = Object.keys(a || {}).sort();
+  const keysB = Object.keys(b || {}).sort();
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (Number(a[k]) !== Number(b[k])) return false;
+  }
+  return true;
 }
 
 export default function SaldosEnvases() {
   const [vistaActual, setVistaActual] = useState('saldos');
   const [filtroTipo, setFiltroTipo] = useState('Ambos');
   const [busqueda, setBusqueda] = useState('');
+  /** Mapa `${tipo}_${id}` → saldo_envases recalculado (objeto). Se actualiza cuando el "efecto sanador" termina para esa entidad. */
+  const [saldosActualizados, setSaldosActualizados] = useState({});
+  const healingAbortedRef = useRef(false);
 
   const { data: proveedores = [], isLoading: loadingProv } = useQuery({
     queryKey: ['proveedores-saldosenvases', busqueda],
@@ -127,67 +140,107 @@ export default function SaldosEnvases() {
     refetchOnWindowFocus: false
   });
 
-  const todosLosSaldos = useMemo(() => {
+  /** Lista unificada: todas las entidades a mostrar (proveedores + clientes), con saldo efectivo = saldosActualizados o el de la API. Incluye a todos; saldo 0 se muestra como 0. */
+  const entidadesConSaldoEfectivo = useMemo(() => {
     const lista = [];
-    const safeEnvases = (raw, debugLabel) => {
-      try {
-        const arr = saldoEnvasesAArray(raw, debugLabel);
-        return Array.isArray(arr) ? arr : [];
-      } catch {
-        return [];
-      }
-    };
+    const prov = Array.isArray(proveedores) ? proveedores : [];
+    const cli = Array.isArray(clientes) ? clientes : [];
 
+    prov.forEach((p) => {
+      if (!p || (p.id == null && p.nombre == null)) return;
+      const key = `Proveedor_${p.id}`;
+      const efectivo = saldosActualizados[key] !== undefined ? saldosActualizados[key] : normalizarSaldoEnvases(p.saldo_envases);
+      const envasesArray = saldoEnvasesAArray(efectivo);
+      const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
+      const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
+      lista.push({
+        id: p.id,
+        nombre: p.nombre || 'Desconocido',
+        tipo: 'Proveedor',
+        whatsapp: p.whatsapp,
+        envases: envasesArray,
+        totalAdeudado,
+        totalAFavor,
+        _key: key,
+      });
+    });
+
+    cli.forEach((c) => {
+      if (!c || (c.id == null && c.nombre == null)) return;
+      const key = `Cliente_${c.id}`;
+      const efectivo = saldosActualizados[key] !== undefined ? saldosActualizados[key] : normalizarSaldoEnvases(c.saldo_envases);
+      const envasesArray = saldoEnvasesAArray(efectivo);
+      const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
+      const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
+      lista.push({
+        id: c.id,
+        nombre: c.nombre || 'Desconocido',
+        tipo: 'Cliente',
+        whatsapp: c.whatsapp,
+        envases: envasesArray,
+        totalAdeudado,
+        totalAFavor,
+        _key: key,
+      });
+    });
+
+    return lista.sort((a, b) => (b.totalAdeudado || 0) - (a.totalAdeudado || 0));
+  }, [proveedores, clientes, saldosActualizados]);
+
+  /** Entidades visibles según filtro tipo y búsqueda (misma lista que se muestra en la tabla). */
+  const entidadesVisibles = useMemo(() => {
+    let list = entidadesConSaldoEfectivo;
+    if (filtroTipo !== 'Ambos') {
+      list = list.filter((e) => e.tipo === filtroTipo);
+    }
+    return list;
+  }, [entidadesConSaldoEfectivo, filtroTipo]);
+
+  /** Cola de entidades para el efecto sanador: solo depende de datos cargados y filtros, no de saldosActualizados. */
+  const healingItems = useMemo(() => {
+    const list = [];
+    const q = (busqueda || '').trim().toLowerCase();
     (Array.isArray(proveedores) ? proveedores : []).forEach((p) => {
-      try {
-        if (!p || (p.id == null && p.nombre == null)) return;
-        const label = `Proveedor "${p.nombre ?? 'sin nombre'}" (id: ${p.id})`;
-        const obj = normalizarSaldoEnvases(p.saldo_envases, label);
-        if (Object.keys(obj).length === 0) return;
-        const envasesArray = safeEnvases(p.saldo_envases, label);
-        const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
-        const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
-        lista.push({
-          id: p.id,
-          nombre: p.nombre || 'Desconocido',
-          tipo: 'Proveedor',
-          whatsapp: p.whatsapp,
-          envases: envasesArray,
-          totalAdeudado,
-          totalAFavor,
-          historial: [],
-        });
-      } catch {
-        // Formato inesperado: omitir entidad sin romper la lista
-      }
+      if (!p || p.id == null) return;
+      if (filtroTipo === 'Cliente') return;
+      if (q && !(p.nombre || '').toLowerCase().includes(q)) return;
+      list.push({ tipo: 'Proveedor', id: p.id, _key: `Proveedor_${p.id}` });
     });
-
     (Array.isArray(clientes) ? clientes : []).forEach((c) => {
+      if (!c || c.id == null) return;
+      if (filtroTipo === 'Proveedor') return;
+      if (q && !(c.nombre || '').toLowerCase().includes(q)) return;
+      list.push({ tipo: 'Cliente', id: c.id, _key: `Cliente_${c.id}` });
+    });
+    return list;
+  }, [proveedores, clientes, filtroTipo, busqueda]);
+
+  /** Efecto sanador: al cargar la lista visible, recalcula saldos en segundo plano (máx 3 a la vez) y actualiza la UI si cambian.
+   * IMPORTANTE: No incluir saldosActualizados en las deps: se actualiza dentro del efecto y provocaría bucle infinito. */
+  useEffect(() => {
+    if (healingItems.length === 0) return;
+
+    healingAbortedRef.current = false;
+
+    runWithConcurrency(healingItems, CONCURRENCY_HEALING, async ({ tipo, id, _key }) => {
+      if (healingAbortedRef.current) return;
       try {
-        if (!c || (c.id == null && c.nombre == null)) return;
-        const label = `Cliente "${c.nombre ?? 'sin nombre'}" (id: ${c.id})`;
-        const obj = normalizarSaldoEnvases(c.saldo_envases, label);
-        if (Object.keys(obj).length === 0) return;
-        const envasesArray = safeEnvases(c.saldo_envases, label);
-        const totalAdeudado = envasesArray.filter((e) => e.saldo > 0).reduce((sum, e) => sum + e.saldo, 0);
-        const totalAFavor = envasesArray.filter((e) => e.saldo < 0).reduce((sum, e) => sum + Math.abs(e.saldo), 0);
-        lista.push({
-          id: c.id,
-          nombre: c.nombre || 'Desconocido',
-          tipo: 'Cliente',
-          whatsapp: c.whatsapp,
-          envases: envasesArray,
-          totalAdeudado,
-          totalAFavor,
-          historial: [],
+        const nuevoSaldo = await recalcularSaldoEnvasesEntidad(tipo, id);
+        if (healingAbortedRef.current) return;
+        setSaldosActualizados((prev) => {
+          const actual = prev[_key];
+          if (saldosIguales(actual, nuevoSaldo)) return prev;
+          return { ...prev, [_key]: nuevoSaldo };
         });
-      } catch {
-        // Formato inesperado: omitir entidad sin romper la lista
+      } catch (err) {
+        console.warn('[SaldosEnvases] Error recalculando saldo:', _key, err?.message);
       }
     });
 
-    return lista.sort((a, b) => b.totalAdeudado - a.totalAdeudado);
-  }, [proveedores, clientes]);
+    return () => {
+      healingAbortedRef.current = true;
+    };
+  }, [healingItems]);
 
   const generarPDFSaldo = (entidad) => {
     const html = `
@@ -228,6 +281,7 @@ export default function SaldosEnvases() {
               const label = saldo > 0 ? ' (deuda)' : saldo < 0 ? ' (a favor)' : '';
               return `<tr><td>${e.tipo || '-'}</td><td style="color: ${color}; font-weight: bold;">${e.saldo}${label}</td></tr>`;
             }).join('')}
+            ${(Array.isArray(entidad.envases) && entidad.envases.length) === 0 ? '<tr><td colspan="2">Saldo en cero</td></tr>' : ''}
             <tr class="total">
               <td>Deuda total</td>
               <td>${entidad.totalAdeudado ?? 0}</td>
@@ -242,7 +296,7 @@ export default function SaldosEnvases() {
       </body>
       </html>
     `;
-    
+
     const printWindow = window.open('', '_blank');
     printWindow.document.write(html);
     printWindow.document.close();
@@ -255,50 +309,38 @@ export default function SaldosEnvases() {
       return;
     }
     const envs = Array.isArray(entidad.envases) ? entidad.envases : [];
-    const lineas = envs.map((e) => `• ${e.tipo}: ${e.saldo} ${Number(e.saldo) < 0 ? '(a favor)' : '(deuda)'}`);
+    const lineas = envs.length ? envs.map((e) => `• ${e.tipo}: ${e.saldo} ${Number(e.saldo) < 0 ? '(a favor)' : '(deuda)'}`) : ['Saldo en cero'];
     const mensaje =
       `📦 *SALDO DE ENVASES*\n\n` +
       `${entidad.tipo}: ${entidad.nombre}\n\n` +
-      (lineas.length ? lineas.join('\n') + '\n\n' : '') +
+      lineas.join('\n') + '\n\n' +
       `💼 Deuda: ${entidad.totalAdeudado || 0} | A favor: ${entidad.totalAFavor || 0}`;
     const cleanNumber = String(entidad.whatsapp).replace(/\D/g, '');
     const whatsappUrl = `https://wa.me/${cleanNumber}?text=${encodeURIComponent(mensaje)}`;
     window.open(whatsappUrl, '_blank');
   };
 
-  // Cualquier entidad con saldo distinto de 0 (positivo o negativo), sin filtrar “solo deudores”
-  const saldosFiltrados = useMemo(() => {
-    let conSaldo = todosLosSaldos.filter((s) => Array.isArray(s.envases) && s.envases.length > 0);
-    if (filtroTipo !== 'Ambos') {
-      conSaldo = conSaldo.filter((s) => s.tipo === filtroTipo);
-    }
-    return conSaldo;
-  }, [todosLosSaldos, filtroTipo]);
+  const saldosConDeuda = useMemo(() => {
+    return entidadesVisibles.filter((s) => (s.totalAdeudado || 0) > 0 || (s.totalAFavor || 0) > 0);
+  }, [entidadesVisibles]);
 
   const saldosPagados = useMemo(() => {
-    let pagados = todosLosSaldos.filter((s) => !Array.isArray(s.envases) || s.envases.length === 0);
-    if (filtroTipo !== 'Ambos') {
-      pagados = pagados.filter((s) => s.tipo === filtroTipo);
-    }
-    return pagados;
-  }, [todosLosSaldos, filtroTipo]);
+    return entidadesVisibles.filter((s) => (s.totalAdeudado || 0) === 0 && (s.totalAFavor || 0) === 0);
+  }, [entidadesVisibles]);
 
-  const saldosPorProveedor = saldosFiltrados.filter(s => s.tipo === 'Proveedor');
-  const saldosPorCliente = saldosFiltrados.filter(s => s.tipo === 'Cliente');
-
-  const totalGeneral = saldosFiltrados.reduce((sum, s) => sum + s.totalAdeudado, 0);
-  const totalProveedores = saldosPorProveedor.reduce((sum, p) => sum + p.totalAdeudado, 0);
-  const totalClientes = saldosPorCliente.reduce((sum, c) => sum + c.totalAdeudado, 0);
+  const saldosPorProveedor = saldosConDeuda.filter((s) => s.tipo === 'Proveedor');
+  const saldosPorCliente = saldosConDeuda.filter((s) => s.tipo === 'Cliente');
+  const totalProveedores = saldosPorProveedor.reduce((sum, p) => sum + (p.totalAdeudado || 0), 0);
+  const totalClientes = saldosPorCliente.reduce((sum, c) => sum + (c.totalAdeudado || 0), 0);
 
   const stockDisponible = useMemo(() => {
     return (Array.isArray(envases) ? envases : [])
-      .map(e => ({ tipo: e.tipo || 'Sin tipo', stock: Math.max(0, Number(e.stock_vacios) || 0) }))
-      .filter(e => e.tipo)
+      .map((e) => ({ tipo: e.tipo || 'Sin tipo', stock: Math.max(0, Number(e.stock_vacios) || 0) }))
+      .filter((e) => e.tipo)
       .sort((a, b) => b.stock - a.stock);
   }, [envases]);
 
   const totalStockDisponible = stockDisponible.reduce((sum, e) => sum + e.stock, 0);
-
   const isLoading = loadingProv || loadingCli || (vistaActual === 'stock' ? loadingEnv : false);
 
   return (
@@ -311,11 +353,10 @@ export default function SaldosEnvases() {
             </div>
             <div className="flex-1">
               <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Saldos de Envases</h1>
-              <p className="text-slate-500 text-sm">Stock disponible y envases adeudados</p>
+              <p className="text-slate-500 text-sm">Stock disponible y envases adeudados · Se recalculan al cargar</p>
             </div>
           </div>
-          
-          {/* Selector de vista */}
+
           <div className="flex gap-2 flex-wrap">
             <Button
               variant={vistaActual === 'stock' ? 'default' : 'outline'}
@@ -339,10 +380,10 @@ export default function SaldosEnvases() {
               Saldos Pagados
             </Button>
 
-            {vistaActual === 'saldos' && saldosFiltrados.length > 0 && (
+            {vistaActual === 'saldos' && saldosConDeuda.length > 0 && (
               <Button
                 variant="outline"
-                onClick={() => downloadResumenSaldosPDF(saldosFiltrados, filtroTipo)}
+                onClick={() => downloadResumenSaldosPDF(saldosConDeuda, filtroTipo)}
                 className="ml-auto"
               >
                 <FileDown className="h-4 w-4 mr-1" />
@@ -378,7 +419,6 @@ export default function SaldosEnvases() {
           </div>
         </div>
 
-        {/* Resumen General - Stock Disponible */}
         {vistaActual === 'stock' && (
           <div className="grid grid-cols-1 md:grid-cols-1 gap-4 mb-6">
             <Card className="border-0 shadow-lg shadow-slate-200/50">
@@ -398,57 +438,53 @@ export default function SaldosEnvases() {
           </div>
         )}
 
-        {/* Resumen General - Saldos por Entidad */}
         {vistaActual === 'saldos' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <Card className="border-0 shadow-lg shadow-slate-200/50">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                  <AlertTriangle className="h-6 w-6 text-red-600" />
+            <Card className="border-0 shadow-lg shadow-slate-200/50">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                    <AlertTriangle className="h-6 w-6 text-red-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Proveedores con saldo pendiente</p>
+                    <p className="text-2xl font-bold text-red-600">{saldosPorProveedor.length}</p>
+                    <p className="text-xs text-slate-400">{totalProveedores} envases (deuda)</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-slate-500">Proveedores con saldo pendiente</p>
-                  <p className="text-2xl font-bold text-red-600">{saldosPorProveedor.length}</p>
-                  <p className="text-xs text-slate-400">{totalProveedores} envases (deuda)</p>
+              </CardContent>
+            </Card>
+            <Card className="border-0 shadow-lg shadow-slate-200/50">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                    <Users className="h-6 w-6 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Proveedores</p>
+                    <p className="text-2xl font-bold text-blue-600">{entidadesVisibles.filter((e) => e.tipo === 'Proveedor').length}</p>
+                    <p className="text-xs text-slate-500">{saldosPorProveedor.length} con saldo ≠ 0</p>
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 shadow-lg shadow-slate-200/50">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                  <Users className="h-6 w-6 text-blue-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-0 shadow-lg shadow-slate-200/50">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                    <User className="h-6 w-6 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Clientes con saldo pendiente</p>
+                    <p className="text-2xl font-bold text-purple-600">{totalClientes}</p>
+                    <p className="text-xs text-slate-500">{saldosPorCliente.length} con saldo ≠ 0</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-slate-500">Proveedores</p>
-                  <p className="text-2xl font-bold text-blue-600">{totalProveedores}</p>
-                  <p className="text-xs text-slate-500">{saldosPorProveedor.length} con saldo ≠ 0</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-0 shadow-lg shadow-slate-200/50">
-            <CardContent className="p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
-                  <User className="h-6 w-6 text-purple-600" />
-                </div>
-                <div>
-                  <p className="text-xs text-slate-500">Clientes con saldo pendiente</p>
-                  <p className="text-2xl font-bold text-purple-600">{totalClientes}</p>
-                  <p className="text-xs text-slate-500">{saldosPorCliente.length} con saldo ≠ 0</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
           </div>
         )}
 
-        {/* Vista Stock Disponible */}
         {vistaActual === 'stock' && (
           isLoading ? (
             <div className="text-center py-12 text-slate-500">Cargando...</div>
@@ -458,12 +494,8 @@ export default function SaldosEnvases() {
                 <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <Package className="h-8 w-8 text-slate-400" />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                  Sin stock de envases
-                </h3>
-                <p className="text-slate-500">
-                  No hay envases disponibles en el acopio
-                </p>
+                <h3 className="text-lg font-semibold text-slate-800 mb-2">Sin stock de envases</h3>
+                <p className="text-slate-500">No hay envases disponibles en el acopio</p>
               </CardContent>
             </Card>
           ) : (
@@ -497,17 +529,11 @@ export default function SaldosEnvases() {
                           </td>
                           <td className="p-4 text-right">
                             {item.stock > 0 ? (
-                              <Badge className="bg-teal-100 text-teal-700 border-teal-300">
-                                Disponible
-                              </Badge>
+                              <Badge className="bg-teal-100 text-teal-700 border-teal-300">Disponible</Badge>
                             ) : item.stock < 0 ? (
-                              <Badge variant="destructive">
-                                Déficit
-                              </Badge>
+                              <Badge variant="destructive">Déficit</Badge>
                             ) : (
-                              <Badge variant="outline">
-                                Agotado
-                              </Badge>
+                              <Badge variant="outline">Agotado</Badge>
                             )}
                           </td>
                         </tr>
@@ -520,183 +546,126 @@ export default function SaldosEnvases() {
           )
         )}
 
-        {/* Lista de Entidades - Saldos CON Deuda */}
         {vistaActual === 'saldos' && (isLoading ? (
-          <div className="text-center py-12 text-slate-500">Cargando...</div>
-        ) : saldosFiltrados.length === 0 ? (
+          <div className="text-center py-12 text-slate-500">Cargando lista...</div>
+        ) : entidadesVisibles.length === 0 ? (
           <Card className="border-0 shadow-lg shadow-slate-200/50">
             <CardContent className="p-12 text-center">
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="h-8 w-8 text-green-600" />
-              </div>
-              <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                Sin saldos pendientes
-              </h3>
-              <p className="text-slate-500">
-                {filtroTipo === 'Ambos'
-                  ? 'Ningún proveedor o cliente tiene saldo de envases distinto de 0'
-                  : `Ningún ${filtroTipo === 'Proveedor' ? 'proveedor' : 'cliente'} tiene saldo de envases distinto de 0`}
-              </p>
+              <p className="text-slate-500">No hay entidades que coincidan con el filtro o la búsqueda.</p>
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-4">
-            {saldosFiltrados.map((entidad) => (
-              <Card key={`${entidad.tipo}_${entidad.id}`} className="border-0 shadow-md hover:shadow-lg transition-shadow">
+            {entidadesVisibles.map((entidad) => (
+              <Card key={entidad._key} className="border-0 shadow-md hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={entidad.tipo === 'Proveedor' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-purple-50 text-purple-700 border-purple-200'}>
                         {entidad.tipo === 'Proveedor' ? 'Proveedor (Me debe)' : 'Cliente (Le debo)'}
                       </Badge>
-                      <CardTitle className="text-lg font-semibold">
-                        {entidad.nombre}
-                      </CardTitle>
+                      <CardTitle className="text-lg font-semibold">{entidad.nombre}</CardTitle>
                     </div>
                     {entidad.totalAdeudado > 0 ? (
                       <Badge variant="destructive" className="text-base px-3 py-1">
                         {entidad.totalAdeudado} envases (deuda)
                       </Badge>
                     ) : (entidad.totalAFavor || 0) > 0 ? (
-                      <Badge className="text-base px-3 py-1 bg-green-100 text-green-800 border-green-300">
-                        Saldo a favor
-                      </Badge>
+                      <Badge className="text-base px-3 py-1 bg-green-100 text-green-800 border-green-300">Saldo a favor</Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-base px-3 py-1">
-                        Al día
-                      </Badge>
+                      <Badge variant="secondary" className="text-base px-3 py-1">0 · Al día</Badge>
                     )}
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-wrap gap-3 mb-3">
-                    {(Array.isArray(entidad.envases) ? entidad.envases : []).map((env, i) => {
-                      const esDeuda = Number(env.saldo) > 0;
-                      const esAFavor = Number(env.saldo) < 0;
-                      return (
-                        <div
-                          key={i}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${
-                            esDeuda
-                              ? 'bg-red-50 border-red-200'
-                              : esAFavor
-                                ? 'bg-green-50 border-green-200'
-                                : 'bg-slate-50 border-slate-200'
-                          }`}
-                        >
-                          <Package
-                            className={`h-4 w-4 ${
-                              esDeuda ? 'text-red-500' : esAFavor ? 'text-green-600' : 'text-slate-500'
-                            }`}
-                          />
-                          <span
-                            className={`font-medium ${
-                              esDeuda ? 'text-red-800' : esAFavor ? 'text-green-800' : 'text-slate-700'
+                    {(Array.isArray(entidad.envases) && entidad.envases.length) > 0 ? (
+                      entidad.envases.map((env, i) => {
+                        const esDeuda = Number(env.saldo) > 0;
+                        const esAFavor = Number(env.saldo) < 0;
+                        return (
+                          <div
+                            key={i}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${
+                              esDeuda ? 'bg-red-50 border-red-200' : esAFavor ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'
                             }`}
                           >
-                            {env.tipo}:
-                          </span>
-                          <span
-                            className={`font-bold ${
-                              esDeuda ? 'text-red-600' : esAFavor ? 'text-green-700' : 'text-slate-600'
-                            }`}
-                          >
-                            {env.saldo}
-                          </span>
-                          {esAFavor && <span className="text-xs text-green-600">(a favor)</span>}
-                          {!esDeuda && !esAFavor && (
-                            <span className="text-xs text-slate-500">(al día)</span>
-                          )}
-                        </div>
-                      );
-                    })}
+                            <Package className={`h-4 w-4 ${esDeuda ? 'text-red-500' : esAFavor ? 'text-green-600' : 'text-slate-500'}`} />
+                            <span className={`font-medium ${esDeuda ? 'text-red-800' : esAFavor ? 'text-green-800' : 'text-slate-700'}`}>{env.tipo}:</span>
+                            <span className={`font-bold ${esDeuda ? 'text-red-600' : esAFavor ? 'text-green-700' : 'text-slate-600'}`}>{env.saldo}</span>
+                            {esAFavor && <span className="text-xs text-green-600">(a favor)</span>}
+                            {!esDeuda && !esAFavor && <span className="text-xs text-slate-500">(al día)</span>}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-slate-50 border-slate-200">
+                        <Package className="h-4 w-4 text-slate-500" />
+                        <span className="font-medium text-slate-700">Saldo:</span>
+                        <span className="font-bold text-slate-600">0</span>
+                        <span className="text-xs text-slate-500">(al día)</span>
+                      </div>
+                    )}
                   </div>
-                  
                   <div className="flex flex-wrap gap-2 pt-3 border-t">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => generarPDFSaldo(entidad)}
-                    >
-                      <FileDown className="h-4 w-4 mr-1" />
-                      PDF
+                    <Button variant="outline" size="sm" onClick={() => generarPDFSaldo(entidad)}>
+                      <FileDown className="h-4 w-4 mr-1" /> PDF
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => compartirWhatsAppSaldo(entidad)}
-                      className="text-green-600"
-                    >
-                      <MessageCircle className="h-4 w-4 mr-1" />
-                      WhatsApp
+                    <Button variant="outline" size="sm" onClick={() => compartirWhatsAppSaldo(entidad)} className="text-green-600">
+                      <MessageCircle className="h-4 w-4 mr-1" /> WhatsApp
                     </Button>
                   </div>
                 </CardContent>
               </Card>
             ))}
           </div>
-          ))}
+        ))}
 
-          {/* Lista de Entidades - Saldos PAGADOS (sin deuda) */}
-          {vistaActual === 'pagados' && (isLoading ? (
+        {vistaActual === 'pagados' && (isLoading ? (
           <div className="text-center py-12 text-slate-500">Cargando...</div>
-          ) : saldosPagados.length === 0 ? (
+        ) : saldosPagados.length === 0 ? (
           <Card className="border-0 shadow-lg shadow-slate-200/50">
             <CardContent className="p-12 text-center">
               <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Package className="h-8 w-8 text-slate-400" />
               </div>
-              <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                Sin saldos pagados
-              </h3>
+              <h3 className="text-lg font-semibold text-slate-800 mb-2">Sin saldos pagados</h3>
               <p className="text-slate-500">
-                Aún no hay {filtroTipo === 'Ambos' ? 'proveedores o clientes' : filtroTipo === 'Proveedor' ? 'proveedores' : 'clientes'} que hayan devuelto todos sus envases
+                No hay {filtroTipo === 'Ambos' ? 'proveedores o clientes' : filtroTipo === 'Proveedor' ? 'proveedores' : 'clientes'} con saldo 0 en la lista actual
               </p>
             </CardContent>
           </Card>
-          ) : (
+        ) : (
           <div className="space-y-4">
             {saldosPagados.map((entidad) => (
-              <Card key={`${entidad.tipo}_${entidad.id}`} className="border-0 shadow-md hover:shadow-lg transition-shadow">
+              <Card key={entidad._key} className="border-0 shadow-md hover:shadow-lg transition-shadow">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={entidad.tipo === 'Proveedor' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-purple-50 text-purple-700 border-purple-200'}>
                         {entidad.tipo}
                       </Badge>
-                      <CardTitle className="text-lg font-semibold">
-                        {entidad.nombre}
-                      </CardTitle>
+                      <CardTitle className="text-lg font-semibold">{entidad.nombre}</CardTitle>
                     </div>
-                    <Badge variant="secondary" className="text-base px-3 py-1 bg-slate-100 text-slate-700 border-slate-300">
-                      Saldo 0 · Al día
-                    </Badge>
+                    <Badge variant="secondary" className="text-base px-3 py-1 bg-slate-100 text-slate-700 border-slate-300">Saldo 0 · Al día</Badge>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <div className="flex items-center gap-2 px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg mb-3">
                     <CheckCircle className="h-5 w-5 text-slate-500" />
-                    <span className="text-sm text-slate-700 font-medium">
-                      Saldo en cero (tuvo movimientos, actualmente al día)
-                    </span>
+                    <span className="text-sm text-slate-700 font-medium">Saldo en cero</span>
                   </div>
-
                   <div className="flex flex-wrap gap-2 pt-3 border-t">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => generarPDFSaldo(entidad)}
-                    >
-                      <FileDown className="h-4 w-4 mr-1" />
-                      PDF
+                    <Button variant="outline" size="sm" onClick={() => generarPDFSaldo(entidad)}>
+                      <FileDown className="h-4 w-4 mr-1" /> PDF
                     </Button>
                   </div>
                 </CardContent>
               </Card>
             ))}
           </div>
-          ))}
-          </div>
-        </div>
-    );
+        ))}
+      </div>
+    </div>
+  );
 }

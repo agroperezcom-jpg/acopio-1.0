@@ -1,11 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
-import { Settings, BookOpen, DollarSign, Database, Users, Wrench, Lock, Loader2 } from 'lucide-react';
+import { Settings, BookOpen, DollarSign, Database, Users, Lock, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import ABMContent from '@/components/configuracion/ABMContent';
 import PlanCuentasContent from '@/components/configuracion/PlanCuentasContent';
 import PreciosContent from '@/components/configuracion/PreciosContent';
-import MantenimientoContent from '@/components/configuracion/MantenimientoContent';
 import SeguridadContent from '@/components/configuracion/SeguridadContent';
 import CategoriasEmpleadoContent from '@/components/configuracion/CategoriasEmpleadoContent';
 import ImportesConfigContent from '@/components/configuracion/ImportesConfigContent';
@@ -23,7 +22,6 @@ import { escapeRegex } from '@/lib/utils';
 import { useSecurity } from '@/lib/SecurityContext';
 import { parseCSVLine } from '@/utils/parseCSV';
 import { extraerMensajeError } from '@/utils/extraerMensajeError';
-import { ejecutarCorreccionManual } from '@/utils/ejecutarCorreccionManual';
 import { usePinGuard } from '@/hooks/usePinGuard';
 
 export default function ConfiguracionUnificada() {
@@ -104,8 +102,6 @@ export default function ConfiguracionUnificada() {
   const [categoriaModal, setCategoriaModal] = useState({ open: false, item: null });
   const [importeModal, setImporteModal] = useState({ open: false, item: null });
   const [importBancosModal, setImportBancosModal] = useState(false);
-  const [ejecutandoCorreccion, setEjecutandoCorreccion] = useState(null);
-  const [progresoSincronizacion, setProgresoSincronizacion] = useState('');
 
   React.useEffect(() => {
     setLoading(false);
@@ -602,7 +598,6 @@ export default function ConfiguracionUnificada() {
     { key: 'precios', label: 'Precios', icon: DollarSign },
     { key: 'categorias', label: 'Categorías', icon: Users },
     { key: 'importes', label: 'Importes', icon: DollarSign },
-    { key: 'mantenimiento', label: 'Mantenimiento', icon: Wrench },
     { key: 'seguridad', label: 'PIN', icon: Lock }
   ];
 
@@ -705,29 +700,6 @@ export default function ConfiguracionUnificada() {
                 importes={importesConfig}
                 onEdit={(item) => setImporteModal({ open: true, item })}
                 onDelete={(id) => eliminarImporteMutation.mutate(id)}
-              />
-            )}
-
-            {activeTab === 'mantenimiento' && (
-              <MantenimientoContent
-                ejecutandoCorreccion={ejecutandoCorreccion}
-                progresoSincronizacion={progresoSincronizacion}
-                onEjecutarCorreccion={async (tipo) => {
-                  setEjecutandoCorreccion(tipo);
-                  setProgresoSincronizacion('');
-                  try {
-                    const onProgress = (tipo === 'correccionSaldosEnvases' || tipo === 'recalcularSaldosDesdeCC' ? (msg) => setProgresoSincronizacion(msg) : undefined);
-                    const result = await ejecutarCorreccionManual(tipo, base44, queryClient, onProgress);
-                    const mensaje = result?.message ?? 'Proceso finalizado correctamente.';
-                    toast.success(mensaje);
-                  } catch (error) {
-                    console.error(`Error en corrección ${tipo}:`, error);
-                    toast.error(`Error al ejecutar: ${error?.message ?? 'Error desconocido'}`);
-                  } finally {
-                    setEjecutandoCorreccion(null);
-                    setProgresoSincronizacion('');
-                  }
-                }}
               />
             )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { format } from 'date-fns';
@@ -9,9 +9,22 @@ import MonthNavigator from '@/components/MonthNavigator';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { recalcularSaldoEntidad } from '@/services/ContabilidadService';
 
 const PAGE_SIZE = 20;
-const FILTRO_SALDO = { saldo_actual: { $ne: 0 } };
+const CONCURRENCY_HEALING = 3;
+
+/** Ejecuta tareas con concurrencia limitada. */
+async function runWithConcurrency(items, concurrency, fn) {
+  const executing = new Set();
+  for (const item of items) {
+    const promise = Promise.resolve().then(() => fn(item));
+    executing.add(promise);
+    promise.finally(() => executing.delete(promise));
+    if (executing.size >= concurrency) await Promise.race(executing);
+  }
+  await Promise.all(executing);
+}
 
 const COMPROBANTE_LABEL = {
   IngresoFruta: 'Ingreso Fruta',
@@ -134,47 +147,94 @@ function DetalleCuentaEntidad({ entidadId, entidadTipo, entidadNombre, onVolver 
   );
 }
 
-function ListaCuentasActivas({ onVerDetalle }) {
+function ListaCuentasActivas({ onVerDetalle, saldosActualizados, setSaldosActualizados }) {
   const [pagina, setPagina] = useState(1);
   const skip = (pagina - 1) * PAGE_SIZE;
+  const healingAbortedRef = useRef(false);
 
+  /** Carga amplia: todas las entidades (sin filtrar por saldo != 0) para que el recálculo pueda corregir. */
   const { data: proveedores = [], isLoading: loadingProv } = useQuery({
-    queryKey: ['proveedores-con-saldo', pagina],
-    queryFn: () =>
-      base44.entities.Proveedor.filter(FILTRO_SALDO, 'nombre', PAGE_SIZE, skip),
+    queryKey: ['proveedores-cuentacorriente', pagina],
+    queryFn: () => base44.entities.Proveedor.list('nombre', PAGE_SIZE, skip),
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 
   const { data: clientes = [], isLoading: loadingCli } = useQuery({
-    queryKey: ['clientes-con-saldo', pagina],
-    queryFn: () =>
-      base44.entities.Cliente.filter(FILTRO_SALDO, 'nombre', PAGE_SIZE, skip),
+    queryKey: ['clientes-cuentacorriente', pagina],
+    queryFn: () => base44.entities.Cliente.list('nombre', PAGE_SIZE, skip),
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
 
   const filas = useMemo(() => {
+    const prov = (Array.isArray(proveedores) ? proveedores : []).map((p) => {
+      const id = `Proveedor-${p.id}`;
+      const saldo = setSaldosActualizados && saldosActualizados[id] !== undefined
+        ? saldosActualizados[id]
+        : (Number(p.saldo_actual) || 0);
+      return {
+        id,
+        entidadId: p.id,
+        entidadTipo: 'Proveedor',
+        nombre: p.nombre,
+        tipo: 'Proveedor',
+        telefono: p.telefono || p.whatsapp || '',
+        saldo,
+      };
+    });
+    const cli = (Array.isArray(clientes) ? clientes : []).map((c) => {
+      const id = `Cliente-${c.id}`;
+      const saldo = setSaldosActualizados && saldosActualizados[id] !== undefined
+        ? saldosActualizados[id]
+        : (Number(c.saldo_actual) || 0);
+      return {
+        id,
+        entidadId: c.id,
+        entidadTipo: 'Cliente',
+        nombre: c.nombre,
+        tipo: 'Cliente',
+        telefono: c.telefono || c.whatsapp || '',
+        saldo,
+      };
+    });
+    return [...prov, ...cli].sort((a, b) => Math.abs(b.saldo) - Math.abs(a.saldo));
+  }, [proveedores, clientes, saldosActualizados]);
+
+  const healingItems = useMemo(() => {
     const prov = (Array.isArray(proveedores) ? proveedores : []).map((p) => ({
-      id: `Proveedor-${p.id}`,
-      entidadId: p.id,
       entidadTipo: 'Proveedor',
-      nombre: p.nombre,
-      tipo: 'Proveedor',
-      telefono: p.telefono || p.whatsapp || '',
-      saldo: Number(p.saldo_actual) || 0,
+      entidadId: p.id,
+      _key: `Proveedor-${p.id}`,
     }));
     const cli = (Array.isArray(clientes) ? clientes : []).map((c) => ({
-      id: `Cliente-${c.id}`,
-      entidadId: c.id,
       entidadTipo: 'Cliente',
-      nombre: c.nombre,
-      tipo: 'Cliente',
-      telefono: c.telefono || c.whatsapp || '',
-      saldo: Number(c.saldo_actual) || 0,
+      entidadId: c.id,
+      _key: `Cliente-${c.id}`,
     }));
-    return [...prov, ...cli].sort((a, b) => Math.abs(b.saldo) - Math.abs(a.saldo));
-  }, [proveedores, clientes]);
+    return [...prov, ...cli];
+  }, [proveedores, clientes, pagina]);
+
+  /** Autocuración: recalcula saldo por entidad. No incluir saldosActualizados en deps (se actualiza dentro → bucle infinito). */
+  useEffect(() => {
+    if (healingItems.length === 0 || !setSaldosActualizados) return;
+    healingAbortedRef.current = false;
+    runWithConcurrency(healingItems, CONCURRENCY_HEALING, async ({ entidadTipo, entidadId, _key }) => {
+      if (healingAbortedRef.current) return;
+      try {
+        const nuevoSaldo = await recalcularSaldoEntidad(entidadTipo, entidadId);
+        if (healingAbortedRef.current) return;
+        setSaldosActualizados((prev) => {
+          const actual = prev[_key];
+          if (actual !== undefined && Math.round(actual * 100) / 100 === Math.round(nuevoSaldo * 100) / 100) return prev;
+          return { ...prev, [_key]: nuevoSaldo };
+        });
+      } catch (err) {
+        console.warn('[CuentaCorriente] Error recalculando saldo:', _key, err?.message);
+      }
+    });
+    return () => { healingAbortedRef.current = true; };
+  }, [healingItems, setSaldosActualizados]);
 
   const hasMoreProv = (Array.isArray(proveedores) ? proveedores : []).length === PAGE_SIZE;
   const hasMoreCli = (Array.isArray(clientes) ? clientes : []).length === PAGE_SIZE;
@@ -196,7 +256,7 @@ function ListaCuentasActivas({ onVerDetalle }) {
   if (filas.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-12 text-center text-slate-500">
-        No hay cuentas con saldo distinto de cero
+        No hay proveedores ni clientes en esta página
       </div>
     );
   }
@@ -275,16 +335,18 @@ function ListaCuentasActivas({ onVerDetalle }) {
   );
 }
 
-function ListaCuentasCero({ onVerDetalle }) {
+function ListaCuentasCero({ onVerDetalle, saldosActualizados, setSaldosActualizados }) {
   const [fechaVisual, setFechaVisual] = useState(new Date());
   const [pagina, setPagina] = useState(1);
   const skip = (pagina - 1) * PAGE_SIZE;
+  const healingAbortedRef = useRef(false);
 
   const fechaDesde = startOfMonth(fechaVisual);
   const fechaHasta = endOfMonth(fechaVisual);
   const desdeISO = fechaDesde.toISOString();
   const hastaISO = fechaHasta.toISOString();
 
+  /** Lista amplia: entidades con saldo_actual 0 (opcionalmente filtradas por fecha de actualización). */
   const filtroSaldoCero = useMemo(
     () => ({
       saldo_actual: 0,
@@ -317,26 +379,73 @@ function ListaCuentasCero({ onVerDetalle }) {
   });
 
   const filas = useMemo(() => {
+    const prov = (Array.isArray(proveedores) ? proveedores : []).map((p) => {
+      const id = `Proveedor-${p.id}`;
+      const saldo = setSaldosActualizados && saldosActualizados[id] !== undefined
+        ? saldosActualizados[id]
+        : 0;
+      return {
+        id,
+        entidadId: p.id,
+        entidadTipo: 'Proveedor',
+        nombre: p.nombre,
+        tipo: 'Proveedor',
+        telefono: p.telefono || p.whatsapp || '',
+        saldo,
+      };
+    });
+    const cli = (Array.isArray(clientes) ? clientes : []).map((c) => {
+      const id = `Cliente-${c.id}`;
+      const saldo = setSaldosActualizados && saldosActualizados[id] !== undefined
+        ? saldosActualizados[id]
+        : 0;
+      return {
+        id,
+        entidadId: c.id,
+        entidadTipo: 'Cliente',
+        nombre: c.nombre,
+        tipo: 'Cliente',
+        telefono: c.telefono || c.whatsapp || '',
+        saldo,
+      };
+    });
+    return [...prov, ...cli].sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [proveedores, clientes, saldosActualizados]);
+
+  const healingItems = useMemo(() => {
     const prov = (Array.isArray(proveedores) ? proveedores : []).map((p) => ({
-      id: `Proveedor-${p.id}`,
-      entidadId: p.id,
       entidadTipo: 'Proveedor',
-      nombre: p.nombre,
-      tipo: 'Proveedor',
-      telefono: p.telefono || p.whatsapp || '',
-      saldo: 0,
+      entidadId: p.id,
+      _key: `Proveedor-${p.id}`,
     }));
     const cli = (Array.isArray(clientes) ? clientes : []).map((c) => ({
-      id: `Cliente-${c.id}`,
-      entidadId: c.id,
       entidadTipo: 'Cliente',
-      nombre: c.nombre,
-      tipo: 'Cliente',
-      telefono: c.telefono || c.whatsapp || '',
-      saldo: 0,
+      entidadId: c.id,
+      _key: `Cliente-${c.id}`,
     }));
-    return [...prov, ...cli].sort((a, b) => a.nombre.localeCompare(b.nombre));
-  }, [proveedores, clientes]);
+    return [...prov, ...cli];
+  }, [proveedores, clientes, pagina, fechaVisual]);
+
+  /** Autocuración: recalcula saldo por entidad. No incluir saldosActualizados en deps (se actualiza dentro → bucle infinito). */
+  useEffect(() => {
+    if (healingItems.length === 0 || !setSaldosActualizados) return;
+    healingAbortedRef.current = false;
+    runWithConcurrency(healingItems, CONCURRENCY_HEALING, async ({ entidadTipo, entidadId, _key }) => {
+      if (healingAbortedRef.current) return;
+      try {
+        const nuevoSaldo = await recalcularSaldoEntidad(entidadTipo, entidadId);
+        if (healingAbortedRef.current) return;
+        setSaldosActualizados((prev) => {
+          const actual = prev[_key];
+          if (actual !== undefined && Math.round(actual * 100) / 100 === Math.round(nuevoSaldo * 100) / 100) return prev;
+          return { ...prev, [_key]: nuevoSaldo };
+        });
+      } catch (err) {
+        console.warn('[CuentaCorriente] Error recalculando saldo:', _key, err?.message);
+      }
+    });
+    return () => { healingAbortedRef.current = true; };
+  }, [healingItems, setSaldosActualizados]);
 
   const hasMoreProv = (Array.isArray(proveedores) ? proveedores : []).length === PAGE_SIZE;
   const hasMoreCli = (Array.isArray(clientes) ? clientes : []).length === PAGE_SIZE;
@@ -387,7 +496,11 @@ function ListaCuentasCero({ onVerDetalle }) {
                       </Badge>
                     </td>
                     <td className="py-3 px-4 text-slate-600">{fila.telefono || '—'}</td>
-                    <td className="py-3 px-4 text-right font-semibold text-slate-600">0.00</td>
+                    <td className="py-3 px-4 text-right font-semibold">
+                      <span className={fila.saldo !== 0 ? (fila.saldo > 0 ? 'text-red-600' : 'text-green-600') : 'text-slate-600'}>
+                        {fila.saldo !== 0 ? `${fila.saldo > 0 ? '+' : ''}${Number(fila.saldo).toFixed(2)}` : '0.00'}
+                      </span>
+                    </td>
                     <td className="py-3 px-4">
                       <Button
                         variant="outline"
@@ -439,6 +552,8 @@ function ListaCuentasCero({ onVerDetalle }) {
 export default function CuentaCorriente() {
   const [activeTab, setActiveTab] = useState('con_saldo');
   const [selectedEntity, setSelectedEntity] = useState(null);
+  /** Saldos recalculados en tiempo real por el efecto sanador; clave = "Proveedor-id" | "Cliente-id". */
+  const [saldosActualizados, setSaldosActualizados] = useState({});
 
   const handleVerDetalle = (entidad) => {
     setSelectedEntity(entidad);
@@ -522,8 +637,20 @@ export default function CuentaCorriente() {
         </div>
 
         {/* Contenido según pestaña */}
-        {activeTab === 'con_saldo' && <ListaCuentasActivas onVerDetalle={handleVerDetalle} />}
-        {activeTab === 'saldo_cero' && <ListaCuentasCero onVerDetalle={handleVerDetalle} />}
+        {activeTab === 'con_saldo' && (
+          <ListaCuentasActivas
+            onVerDetalle={handleVerDetalle}
+            saldosActualizados={saldosActualizados}
+            setSaldosActualizados={setSaldosActualizados}
+          />
+        )}
+        {activeTab === 'saldo_cero' && (
+          <ListaCuentasCero
+            onVerDetalle={handleVerDetalle}
+            saldosActualizados={saldosActualizados}
+            setSaldosActualizados={setSaldosActualizados}
+          />
+        )}
       </div>
     </div>
   );

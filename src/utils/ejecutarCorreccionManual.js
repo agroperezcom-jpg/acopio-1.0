@@ -1,3 +1,9 @@
+/**
+ * Recálculo por lotes: solo exporta funciones de cálculo para uso por otros servicios.
+ * - reconstruirHistoriaEnvases(base44, onProgress): reconstruye saldo_envases de todas las entidades.
+ * - reconstruirSaldosMonetarios(base44, onProgress): reconstruye saldo_actual desde CuentaCorriente.
+ * No contiene UI ni lógica de botones manuales.
+ */
 import { listAll } from '@/utils/listAllPaginado';
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -68,7 +74,7 @@ async function fetchAllCuentaCorriente(base44) {
  * - Ingreso de Fruta (envases_llenos): proveedor devuelve → RECEPCION (-deuda).
  * - Salida de Fruta (envases_llenos): cliente se lleva → ENTREGA (+deuda).
  */
-async function reconstruirHistoriaEnvases(base44, onProgress) {
+export async function reconstruirHistoriaEnvases(base44, onProgress) {
   const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
 
   report('Descargando Proveedores, Clientes y Envases...');
@@ -235,7 +241,7 @@ async function reconstruirHistoriaEnvases(base44, onProgress) {
  * - Haber = aumenta saldo (deuda); Debe = disminuye (pago/cobro).
  * - Persiste saldo_actual redondeado a 2 decimales.
  */
-async function reconstruirSaldosMonetarios(base44, onProgress) {
+export async function reconstruirSaldosMonetarios(base44, onProgress) {
   const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
 
   report('Descargando Cuenta Corriente (lotes de 100)...');
@@ -308,41 +314,4 @@ async function reconstruirSaldosMonetarios(base44, onProgress) {
     movimientosCC: todosCC.length,
     message: `Saldos desde CC: ${actualizados} entidades actualizadas (${todosCC.length} movimientos de CuentaCorriente). saldo_actual matemáticamente correcto.`,
   };
-}
-
-// Función para ejecutar correcciones manualmente
-export async function ejecutarCorreccionManual(tipo, base44, queryClient, onProgress) {
-  const resetFlags = () => {
-    switch (tipo) {
-      case 'correccionSaldosEnvases':
-        localStorage.removeItem('correccion_saldos_envases_v1');
-        break;
-      case 'recalcularSaldosDesdeCC':
-        localStorage.removeItem('recalcular_saldos_desde_cc_v1');
-        break;
-    }
-  };
-
-  resetFlags();
-
-  switch (tipo) {
-    case 'correccionSaldosEnvases': {
-      const resultado = await reconstruirHistoriaEnvases(base44, onProgress);
-      queryClient.invalidateQueries({ queryKey: ['proveedores'] });
-      queryClient.invalidateQueries({ queryKey: ['clientes'] });
-      queryClient.invalidateQueries({ queryKey: ['proveedores-saldosenvases'] });
-      queryClient.invalidateQueries({ queryKey: ['clientes-saldosenvases'] });
-      queryClient.invalidateQueries({ queryKey: ['envases'] });
-      return resultado;
-    }
-    case 'recalcularSaldosDesdeCC': {
-      const resultado = await reconstruirSaldosMonetarios(base44, onProgress);
-      queryClient.invalidateQueries({ queryKey: ['proveedores'] });
-      queryClient.invalidateQueries({ queryKey: ['clientes'] });
-      queryClient.invalidateQueries({ queryKey: ['cuentacorriente'] });
-      return resultado;
-    }
-    default:
-      throw new Error(`Tipo de corrección desconocido: ${tipo}`);
-  }
 }
